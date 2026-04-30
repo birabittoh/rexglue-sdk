@@ -42,11 +42,25 @@ class XcbWindowSurface final : public Surface {
 
 #if REX_HAS_WAYLAND
 
+// Owns a dedicated wl_surface + wl_subsurface for Vulkan presentation.
+// On Wayland, the toolkit (GTK) manages the toplevel wl_surface and attaching
+// Vulkan directly to it causes protocol errors. Instead we create a child
+// surface via the compositor and attach it as a subsurface of the parent.
 class WaylandWindowSurface final : public Surface {
  public:
-  explicit WaylandWindowSurface(wl_display* display, wl_surface* surface,
+  // Takes ownership of child_surface and subsurface (will destroy on dtor).
+  // parent_display is borrowed (not owned).
+  explicit WaylandWindowSurface(wl_display* parent_display,
+                                wl_surface* child_surface,
+                                wl_subsurface* subsurface,
                                 uint32_t width, uint32_t height)
-      : display_(display), surface_(surface), width_(width), height_(height) {}
+      : display_(parent_display),
+        surface_(child_surface),
+        subsurface_(subsurface),
+        width_(width),
+        height_(height) {}
+  ~WaylandWindowSurface() override;
+
   TypeIndex GetType() const override { return kTypeIndex_WaylandSurface; }
   wl_display* display() const { return display_; }
   wl_surface* surface() const { return surface_; }
@@ -60,7 +74,8 @@ class WaylandWindowSurface final : public Surface {
 
  private:
   wl_display* display_;
-  wl_surface* surface_;
+  wl_surface* surface_;         // owned
+  wl_subsurface* subsurface_;   // owned
   uint32_t width_;
   uint32_t height_;
 };

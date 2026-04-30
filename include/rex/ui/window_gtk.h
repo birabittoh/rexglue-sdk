@@ -88,6 +88,11 @@ class GTKWindow : public Window {
   // Non-owning pointer to the active Wayland surface, kept in sync with
   // presenter_surface_ so HandleSizeUpdate can push physical pixel dimensions.
   WaylandWindowSurface* wayland_surface_ = nullptr;
+  // Wayland globals needed for subsurface creation. Bound once on first use.
+  struct wl_compositor* wl_compositor_ = nullptr;
+  struct wl_subcompositor* wl_subcompositor_ = nullptr;
+  bool wayland_globals_bound_ = false;
+  void EnsureWaylandGlobals(struct wl_display* display);
 #endif
 };
 

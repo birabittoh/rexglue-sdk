@@ -10,6 +10,7 @@
  */
 
 #include <algorithm>
+#include <cstring>
 #include <string>
 
 #include <rex/assert.h>
@@ -30,6 +31,38 @@
 #if REX_HAS_WAYLAND
 #include <gdk/gdkwayland.h>
 #endif
+
+#if REX_HAS_WAYLAND
+namespace {
+
+struct WaylandRegistryData {
+  struct wl_compositor* compositor = nullptr;
+  struct wl_subcompositor* subcompositor = nullptr;
+};
+
+void WaylandRegistryGlobalHandler(void* data, struct wl_registry* registry, uint32_t name,
+                                  const char* interface, uint32_t version) {
+  auto* reg_data = static_cast<WaylandRegistryData*>(data);
+  if (std::strcmp(interface, "wl_compositor") == 0) {
+    reg_data->compositor = static_cast<struct wl_compositor*>(
+        wl_registry_bind(registry, name, &wl_compositor_interface,
+                         std::min(version, uint32_t(4))));
+  } else if (std::strcmp(interface, "wl_subcompositor") == 0) {
+    reg_data->subcompositor = static_cast<struct wl_subcompositor*>(
+        wl_registry_bind(registry, name, &wl_subcompositor_interface, 1));
+  }
+}
+
+void WaylandRegistryGlobalRemoveHandler(void* /*data*/, struct wl_registry* /*registry*/,
+                                        uint32_t /*name*/) {}
+
+const struct wl_registry_listener kWaylandRegistryListener = {
+    WaylandRegistryGlobalHandler,
+    WaylandRegistryGlobalRemoveHandler,
+};
+
+}  // namespace
+#endif  // REX_HAS_WAYLAND
 
 namespace {
 
@@ -331,6 +364,16 @@ GTKWindow::~GTKWindow() {
     box_ = nullptr;
     gtk_widget_destroy(window);
   }
+#if REX_HAS_WAYLAND
+  if (wl_subcompositor_) {
+    wl_subcompositor_destroy(wl_subcompositor_);
+    wl_subcompositor_ = nullptr;
+  }
+  if (wl_compositor_) {
+    wl_compositor_destroy(wl_compositor_);
+    wl_compositor_ = nullptr;
+  }
+#endif
 }
 
 bool GTKWindow::OpenImpl() {
@@ -564,6 +607,25 @@ void GTKWindow::FocusImpl() {
   gtk_window_activate_focus(GTK_WINDOW(window_));
 }
 
+#if REX_HAS_WAYLAND
+void GTKWindow::EnsureWaylandGlobals(struct wl_display* display) {
+  if (wayland_globals_bound_) {
+    return;
+  }
+  wayland_globals_bound_ = true;
+  struct wl_registry* registry = wl_display_get_registry(display);
+  if (!registry) {
+    return;
+  }
+  WaylandRegistryData reg_data;
+  wl_registry_add_listener(registry, &kWaylandRegistryListener, &reg_data);
+  wl_display_roundtrip(display);
+  wl_compositor_ = reg_data.compositor;
+  wl_subcompositor_ = reg_data.subcompositor;
+  wl_registry_destroy(registry);
+}
+#endif  // REX_HAS_WAYLAND
+
 std::unique_ptr<Surface> GTKWindow::CreateSurfaceImpl(Surface::TypeFlags allowed_types) {
   GdkDisplay* display = gtk_widget_get_display(window_);
   GdkWindow* drawing_area_window = gtk_widget_get_window(drawing_area_);
@@ -572,23 +634,41 @@ std::unique_ptr<Surface> GTKWindow::CreateSurfaceImpl(Surface::TypeFlags allowed
   wayland_surface_ = nullptr;
   if (allowed_types & Surface::kTypeFlag_WaylandSurface) {
     if (GDK_IS_WAYLAND_DISPLAY(display)) {
-      // On Wayland, child widgets (like GtkDrawingArea) do not have their own
-      // wl_surface. We must use the toplevel window's wl_surface for Vulkan
-      // presentation. The drawing area's GdkWindow is a subsurface/logical
-      // region of the toplevel.
+      // On Wayland, we cannot render Vulkan directly to the toplevel
+      // wl_surface that GTK manages — doing so causes protocol errors because
+      // GTK is already attaching buffers to it. Instead, create a dedicated
+      // child wl_surface via the compositor and attach it as a subsurface of
+      // the parent (the GTK window's surface). Vulkan renders to this child.
+      struct wl_display* wl_dpy = gdk_wayland_display_get_wl_display(display);
+      EnsureWaylandGlobals(wl_dpy);
       GdkWindow* toplevel_gdk_window = gtk_widget_get_window(window_);
-      struct wl_surface* wl_surf = gdk_wayland_window_get_wl_surface(toplevel_gdk_window);
-      if (wl_surf) {
-        GtkAllocation allocation;
-        gtk_widget_get_allocation(drawing_area_, &allocation);
-        int scale = gtk_widget_get_scale_factor(drawing_area_);
-        auto surface = std::make_unique<WaylandWindowSurface>(
-            gdk_wayland_display_get_wl_display(display),
-            wl_surf,
-            uint32_t(allocation.width * scale),
-            uint32_t(allocation.height * scale));
-        wayland_surface_ = surface.get();
-        return surface;
+      struct wl_surface* parent_surface =
+          gdk_wayland_window_get_wl_surface(toplevel_gdk_window);
+      if (wl_compositor_ && wl_subcompositor_ && parent_surface) {
+        struct wl_surface* child_surface = wl_compositor_create_surface(wl_compositor_);
+        if (child_surface) {
+          struct wl_subsurface* subsurface =
+              wl_subcompositor_get_subsurface(wl_subcompositor_, child_surface, parent_surface);
+          if (subsurface) {
+            // Position at (0,0) relative to parent and use desync mode so
+            // Vulkan presents independently of GTK's
+            // frame callbacks.
+            wl_subsurface_set_position(subsurface, 0, 0);
+            wl_subsurface_set_desync(subsurface);
+
+            GtkAllocation allocation;
+            gtk_widget_get_allocation(drawing_area_, &allocation);
+            int scale = gtk_widget_get_scale_factor(drawing_area_);
+            auto surface = std::make_unique<WaylandWindowSurface>(
+                wl_dpy, child_surface, subsurface,
+                uint32_t(allocation.width * scale),
+                uint32_t(allocation.height * scale));
+            wayland_surface_ = surface.get();
+            return surface;
+          } else {
+            wl_surface_destroy(child_surface);
+          }
+        }
       }
     }
   }
