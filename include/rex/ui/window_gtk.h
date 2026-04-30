@@ -25,6 +25,10 @@
 namespace rex {
 namespace ui {
 
+#if REX_HAS_WAYLAND
+class WaylandWindowSurface;
+#endif
+
 class GTKWindow : public Window {
   using super = Window;
 
@@ -79,6 +83,12 @@ class GTKWindow : public Window {
   uint32_t batched_size_update_depth_ = 0;
   bool batched_size_update_contained_configure_ = false;
   bool batched_size_update_contained_draw_ = false;
+
+#if REX_HAS_WAYLAND
+  // Non-owning pointer to the active Wayland surface, kept in sync with
+  // presenter_surface_ so HandleSizeUpdate can push physical pixel dimensions.
+  WaylandWindowSurface* wayland_surface_ = nullptr;
+#endif
 };
 
 class GTKMenuItem : public MenuItem {

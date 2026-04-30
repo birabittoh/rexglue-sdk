@@ -149,6 +149,19 @@ else()
         ${GTK3_LIBRARIES}
         ${X11_XCB_LIBRARIES}
     )
+
+    if(REXGLUE_ENABLE_WAYLAND)
+        pkg_check_modules(WAYLAND_CLIENT wayland-client)
+        pkg_check_modules(GTK3_WAYLAND gtk+-wayland-3.0)
+        if(WAYLAND_CLIENT_FOUND AND GTK3_WAYLAND_FOUND)
+            message(STATUS "ReXGlue: native Wayland support enabled")
+            target_compile_definitions(rexui PUBLIC REX_HAS_WAYLAND=1)
+            target_include_directories(rexui PRIVATE ${WAYLAND_CLIENT_INCLUDE_DIRS})
+            target_link_libraries(rexui PUBLIC ${WAYLAND_CLIENT_LIBRARIES})
+        else()
+            message(STATUS "ReXGlue: Wayland support disabled (wayland-client or GTK3 Wayland backend not found)")
+        endif()
+    endif()
 endif()
 
 # D3D12 backend dependencies

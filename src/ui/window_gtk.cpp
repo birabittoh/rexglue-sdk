@@ -27,6 +27,10 @@
 #include <gdk/gdkx.h>
 #include <xcb/xcb.h>
 
+#if REX_HAS_WAYLAND
+#include <gdk/gdkwayland.h>
+#endif
+
 namespace {
 
 uint32_t ResolveWindowWidth(uint32_t requested_width) {
@@ -563,6 +567,25 @@ void GTKWindow::FocusImpl() {
 std::unique_ptr<Surface> GTKWindow::CreateSurfaceImpl(Surface::TypeFlags allowed_types) {
   GdkDisplay* display = gtk_widget_get_display(window_);
   GdkWindow* drawing_area_window = gtk_widget_get_window(drawing_area_);
+
+#if REX_HAS_WAYLAND
+  wayland_surface_ = nullptr;
+  if (allowed_types & Surface::kTypeFlag_WaylandSurface) {
+    if (GDK_IS_WAYLAND_DISPLAY(display)) {
+      GtkAllocation allocation;
+      gtk_widget_get_allocation(drawing_area_, &allocation);
+      int scale = gtk_widget_get_scale_factor(drawing_area_);
+      auto surface = std::make_unique<WaylandWindowSurface>(
+          gdk_wayland_display_get_wl_display(display),
+          gdk_wayland_window_get_wl_surface(drawing_area_window),
+          uint32_t(allocation.width * scale),
+          uint32_t(allocation.height * scale));
+      wayland_surface_ = surface.get();
+      return surface;
+    }
+  }
+#endif  // REX_HAS_WAYLAND
+
   bool type_known = false;
   bool type_supported_by_display = false;
   if (allowed_types & Surface::kTypeFlag_XcbWindow) {
@@ -574,7 +597,6 @@ std::unique_ptr<Surface> GTKWindow::CreateSurfaceImpl(Surface::TypeFlags allowed
           gdk_x11_window_get_xid(drawing_area_window));
     }
   }
-  // TODO(Triang3l): Wayland surface.
   if (type_known && !type_supported_by_display) {
     REXLOG_ERROR(
         "GTKWindow: The window system of the GTK window is not supported by "
@@ -598,6 +620,15 @@ void GTKWindow::HandleSizeUpdate(WindowDestructionReceiver& destruction_receiver
 
   GtkAllocation drawing_area_allocation;
   gtk_widget_get_allocation(drawing_area_, &drawing_area_allocation);
+
+#if REX_HAS_WAYLAND
+  if (wayland_surface_) {
+    int scale = gtk_widget_get_scale_factor(drawing_area_);
+    wayland_surface_->SetSize(uint32_t(drawing_area_allocation.width * scale),
+                              uint32_t(drawing_area_allocation.height * scale));
+  }
+#endif  // REX_HAS_WAYLAND
+
   OnActualSizeUpdate(uint32_t(drawing_area_allocation.width),
                      uint32_t(drawing_area_allocation.height), destruction_receiver);
   if (destruction_receiver.IsWindowDestroyedOrClosed()) {
