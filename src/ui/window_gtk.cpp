@@ -572,16 +572,24 @@ std::unique_ptr<Surface> GTKWindow::CreateSurfaceImpl(Surface::TypeFlags allowed
   wayland_surface_ = nullptr;
   if (allowed_types & Surface::kTypeFlag_WaylandSurface) {
     if (GDK_IS_WAYLAND_DISPLAY(display)) {
-      GtkAllocation allocation;
-      gtk_widget_get_allocation(drawing_area_, &allocation);
-      int scale = gtk_widget_get_scale_factor(drawing_area_);
-      auto surface = std::make_unique<WaylandWindowSurface>(
-          gdk_wayland_display_get_wl_display(display),
-          gdk_wayland_window_get_wl_surface(drawing_area_window),
-          uint32_t(allocation.width * scale),
-          uint32_t(allocation.height * scale));
-      wayland_surface_ = surface.get();
-      return surface;
+      // On Wayland, child widgets (like GtkDrawingArea) do not have their own
+      // wl_surface. We must use the toplevel window's wl_surface for Vulkan
+      // presentation. The drawing area's GdkWindow is a subsurface/logical
+      // region of the toplevel.
+      GdkWindow* toplevel_gdk_window = gtk_widget_get_window(window_);
+      struct wl_surface* wl_surf = gdk_wayland_window_get_wl_surface(toplevel_gdk_window);
+      if (wl_surf) {
+        GtkAllocation allocation;
+        gtk_widget_get_allocation(drawing_area_, &allocation);
+        int scale = gtk_widget_get_scale_factor(drawing_area_);
+        auto surface = std::make_unique<WaylandWindowSurface>(
+            gdk_wayland_display_get_wl_display(display),
+            wl_surf,
+            uint32_t(allocation.width * scale),
+            uint32_t(allocation.height * scale));
+        wayland_surface_ = surface.get();
+        return surface;
+      }
     }
   }
 #endif  // REX_HAS_WAYLAND
@@ -624,13 +632,18 @@ void GTKWindow::HandleSizeUpdate(WindowDestructionReceiver& destruction_receiver
 #if REX_HAS_WAYLAND
   if (wayland_surface_) {
     int scale = gtk_widget_get_scale_factor(drawing_area_);
-    wayland_surface_->SetSize(uint32_t(drawing_area_allocation.width * scale),
-                              uint32_t(drawing_area_allocation.height * scale));
-  }
+    uint32_t physical_width = uint32_t(drawing_area_allocation.width * scale);
+    uint32_t physical_height = uint32_t(drawing_area_allocation.height * scale);
+    wayland_surface_->SetSize(physical_width, physical_height);
+    // On Wayland, GTK allocations are in logical (CSS) pixels. Report physical
+    // pixels to match what Surface::GetSize() will return.
+    OnActualSizeUpdate(physical_width, physical_height, destruction_receiver);
+  } else
 #endif  // REX_HAS_WAYLAND
-
-  OnActualSizeUpdate(uint32_t(drawing_area_allocation.width),
-                     uint32_t(drawing_area_allocation.height), destruction_receiver);
+  {
+    OnActualSizeUpdate(uint32_t(drawing_area_allocation.width),
+                       uint32_t(drawing_area_allocation.height), destruction_receiver);
+  }
   if (destruction_receiver.IsWindowDestroyedOrClosed()) {
     return;
   }
