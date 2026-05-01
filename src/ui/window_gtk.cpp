@@ -354,6 +354,18 @@ GTKWindow::GTKWindow(WindowedAppContext& app_context, const std::string_view tit
 
 GTKWindow::~GTKWindow() {
   EnterDestructor();
+  if (pointer_grabbed_) {
+    GdkDisplay* gdk_display = gtk_widget_get_display(window_);
+    GdkSeat* seat = gdk_display_get_default_seat(gdk_display);
+    if (seat) {
+      gdk_seat_ungrab(seat);
+    }
+    pointer_grabbed_ = false;
+  }
+  if (blank_cursor_) {
+    g_object_unref(blank_cursor_);
+    blank_cursor_ = nullptr;
+  }
   if (window_) {
     // Set window_ to null to ignore events from now on since this ui::GTKWindow
     // is entering an indeterminate state.
@@ -607,6 +619,95 @@ void GTKWindow::FocusImpl() {
   gtk_window_activate_focus(GTK_WINDOW(window_));
 }
 
+void GTKWindow::ApplyNewMouseCapture() {
+  if (!window_ || pointer_grabbed_) {
+    return;
+  }
+  GdkWindow* gdk_window = gtk_widget_get_window(window_);
+  if (!gdk_window) {
+    return;
+  }
+  GdkDisplay* gdk_display = gtk_widget_get_display(window_);
+  GdkSeat* seat = gdk_display_get_default_seat(gdk_display);
+  if (!seat) {
+    return;
+  }
+  // Grab the pointer to this window. Events will be confined here.
+  GdkGrabStatus status = gdk_seat_grab(
+      seat, gdk_window, GDK_SEAT_CAPABILITY_POINTER, FALSE,
+      blank_cursor_,  // use blank cursor during grab if hidden
+      nullptr, nullptr, nullptr);
+  if (status == GDK_GRAB_SUCCESS) {
+    pointer_grabbed_ = true;
+  }
+}
+
+void GTKWindow::ApplyNewMouseRelease() {
+  if (!pointer_grabbed_) {
+    return;
+  }
+  GdkDisplay* gdk_display = gtk_widget_get_display(window_);
+  GdkSeat* seat = gdk_display_get_default_seat(gdk_display);
+  if (seat) {
+    gdk_seat_ungrab(seat);
+  }
+  pointer_grabbed_ = false;
+  // Restore cursor visibility.
+  GdkWindow* gdk_window = gtk_widget_get_window(window_);
+  if (gdk_window) {
+    gdk_window_set_cursor(gdk_window, nullptr);
+  }
+}
+
+void GTKWindow::ApplyNewCursorVisibility(CursorVisibility old_cursor_visibility) {
+  (void)old_cursor_visibility;
+  if (!window_) {
+    return;
+  }
+  GdkWindow* gdk_window = gtk_widget_get_window(window_);
+  if (!gdk_window) {
+    return;
+  }
+  CursorVisibility visibility = GetCursorVisibility();
+  if (visibility == CursorVisibility::kVisible) {
+    gdk_window_set_cursor(gdk_window, nullptr);
+  } else {
+    // Hidden or auto-hidden: use a blank cursor.
+    if (!blank_cursor_) {
+      GdkDisplay* gdk_display = gtk_widget_get_display(window_);
+      blank_cursor_ = gdk_cursor_new_for_display(gdk_display, GDK_BLANK_CURSOR);
+    }
+    gdk_window_set_cursor(gdk_window, blank_cursor_);
+  }
+}
+
+bool GTKWindow::WarpPointer(int32_t x, int32_t y) {
+  if (!window_) {
+    return false;
+  }
+  GdkDisplay* gdk_display = gtk_widget_get_display(window_);
+#if REX_HAS_WAYLAND
+  // On Wayland, pointer warping is not supported by the protocol.
+  if (GDK_IS_WAYLAND_DISPLAY(gdk_display)) {
+    return false;
+  }
+#endif
+  GdkSeat* seat = gdk_display_get_default_seat(gdk_display);
+  if (!seat) {
+    return false;
+  }
+  GdkDevice* pointer = gdk_seat_get_pointer(seat);
+  if (!pointer) {
+    return false;
+  }
+  GdkScreen* screen = gtk_widget_get_screen(window_);
+  // Convert client coordinates to screen coordinates.
+  int win_x = 0, win_y = 0;
+  gdk_window_get_origin(gtk_widget_get_window(drawing_area_), &win_x, &win_y);
+  gdk_device_warp(pointer, screen, win_x + x, win_y + y);
+  return true;
+}
+
 #if REX_HAS_WAYLAND
 void GTKWindow::EnsureWaylandGlobals(struct wl_display* display) {
   if (wayland_globals_bound_) {
@@ -651,10 +752,20 @@ std::unique_ptr<Surface> GTKWindow::CreateSurfaceImpl(Surface::TypeFlags allowed
               wl_subcompositor_get_subsurface(wl_subcompositor_, child_surface, parent_surface);
           if (subsurface) {
             // Position at (0,0) relative to parent and use desync mode so
-            // Vulkan presents independently of GTK's
-            // frame callbacks.
+            // Vulkan presents independently of GTK's frame callbacks.
             wl_subsurface_set_position(subsurface, 0, 0);
             wl_subsurface_set_desync(subsurface);
+
+            // Set an empty input region on the child surface so that all
+            // pointer/touch events pass through to the parent (GTK's surface).
+            // Without this, the subsurface would intercept all input.
+            struct wl_region* empty_region =
+                wl_compositor_create_region(wl_compositor_);
+            if (empty_region) {
+              wl_surface_set_input_region(child_surface, empty_region);
+              wl_surface_commit(child_surface);
+              wl_region_destroy(empty_region);
+            }
 
             GtkAllocation allocation;
             gtk_widget_get_allocation(drawing_area_, &allocation);

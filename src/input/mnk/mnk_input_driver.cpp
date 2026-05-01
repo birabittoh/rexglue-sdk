@@ -13,18 +13,21 @@
 #include <rex/cvar.h>
 #include <rex/input/input.h>
 #include <rex/logging.h>
+#include <rex/platform.h>
 #include <rex/ui/keybinds.h>
 #include <rex/ui/virtual_key.h>
 #include <rex/ui/window.h>
 
-#include <algorithm>
-#include <cmath>
-#include <cstring>
-
 #if REX_PLATFORM_WIN32
 #include <rex/ui/window_win.h>
 #include <Windows.h>
+#elif REX_PLATFORM_GNU_LINUX
+#include <rex/ui/window_gtk.h>
 #endif
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 
 REXCVAR_DEFINE_BOOL(mnk_mode, false, "Input", "Enable keyboard/mouse controller emulation");
 REXCVAR_DEFINE_INT32(mnk_user_index, 0, "Input", "Controller slot (0-3) for MnK").range(0, 3);
@@ -262,15 +265,31 @@ void MnkInputDriver::CenterCursor() {
     return;
   int32_t cx = static_cast<int32_t>(attached_window_->GetActualLogicalWidth() / 2);
   int32_t cy = static_cast<int32_t>(attached_window_->GetActualLogicalHeight() / 2);
+#if REX_PLATFORM_WIN32
   prev_mouse_x_ = cx;
   prev_mouse_y_ = cy;
-#if REX_PLATFORM_WIN32
   auto* win32_window = dynamic_cast<rex::ui::Win32Window*>(attached_window_);
   if (win32_window && win32_window->hwnd()) {
     POINT pt = {static_cast<LONG>(cx), static_cast<LONG>(cy)};
     ClientToScreen(win32_window->hwnd(), &pt);
     SetCursorPos(pt.x, pt.y);
   }
+#elif REX_PLATFORM_GNU_LINUX
+  auto* gtk_window = dynamic_cast<rex::ui::GTKWindow*>(attached_window_);
+  if (gtk_window) {
+    // WarpPointer returns true on X11 (pointer actually moved) and false on
+    // Wayland (no-op due to security model). Only update tracking if the
+    // pointer was actually repositioned. On Wayland, the pointer is confined
+    // by the grab and OnMouseMove computes correct deltas from the actual
+    // reported positions without re-centering.
+    if (gtk_window->WarpPointer(cx, cy)) {
+      prev_mouse_x_ = cx;
+      prev_mouse_y_ = cy;
+    }
+  }
+#else
+  prev_mouse_x_ = cx;
+  prev_mouse_y_ = cy;
 #endif
 }
 
