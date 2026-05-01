@@ -70,6 +70,9 @@ class MnkInputDriver final : public InputDriver,
   int32_t prev_mouse_y_ = 0;
   bool mouse_captured_ = false;
   bool has_focus_ = true;
+  // Skip delta on first motion after capture to avoid spike when WarpPointer
+  // is a no-op (Wayland).
+  bool pending_mouse_reset_ = false;
 
   // Keystroke queue
   std::queue<X_INPUT_KEYSTROKE> keystroke_queue_;

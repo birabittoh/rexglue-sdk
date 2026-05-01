@@ -24,6 +24,19 @@
 #include <gtk/gtk.h>
 
 extern "C" int main(int argc_pre_gtk, char** argv_pre_gtk) {
+  // Native Wayland support is still experimental. Force X11 backend unless the
+  // user explicitly opts in via REXGLUE_WAYLAND=1 or GDK_BACKEND=wayland.
+  // Both setenv (for child processes / pre-GTK lookup) and
+  // gdk_set_allowed_backends (in-process, authoritative against any earlier
+  // GDK_BACKEND that may have leaked in) are applied for robustness.
+  if (!std::getenv("REXGLUE_WAYLAND") && !std::getenv("GDK_BACKEND")) {
+    setenv("GDK_BACKEND", "x11", 1);
+    gdk_set_allowed_backends("x11");
+  } else if (std::getenv("REXGLUE_WAYLAND")) {
+    setenv("GDK_BACKEND", "wayland", 1);
+    gdk_set_allowed_backends("wayland,x11");
+  }
+
   // Initialize GTK+, which will handle and remove its own arguments from argv.
   // Both GTK+ and Xenia use --option=value argument format (see man
   // gtk-options), however, it's meaningless to try to parse the same argument

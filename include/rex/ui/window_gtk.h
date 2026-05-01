@@ -22,6 +22,17 @@
 #include <gtk/gtk.h>
 #include <xcb/xcb.h>
 
+#if REX_HAS_WAYLAND
+#include <wayland-client.h>
+// Forward-declare generated protocol types at global scope so member pointers
+// inside rex::ui::GTKWindow resolve to the correct type, not a shadow declared
+// inside the namespace.
+struct zwp_pointer_constraints_v1;
+struct zwp_relative_pointer_manager_v1;
+struct zwp_locked_pointer_v1;
+struct zwp_relative_pointer_v1;
+#endif
+
 namespace rex {
 namespace ui {
 
@@ -101,11 +112,30 @@ class GTKWindow : public Window {
   // Non-owning pointer to the active Wayland surface, kept in sync with
   // presenter_surface_ so HandleSizeUpdate can push physical pixel dimensions.
   WaylandWindowSurface* wayland_surface_ = nullptr;
-  // Wayland globals needed for subsurface creation. Bound once on first use.
+  // Wayland globals needed for subsurface creation + pointer lock. Bound once
+  // on first use.
   struct wl_compositor* wl_compositor_ = nullptr;
   struct wl_subcompositor* wl_subcompositor_ = nullptr;
+  struct zwp_pointer_constraints_v1* wl_pointer_constraints_ = nullptr;
+  struct zwp_relative_pointer_manager_v1* wl_relative_pointer_manager_ = nullptr;
   bool wayland_globals_bound_ = false;
+
+  // Per-capture state. Created on grab, destroyed on release.
+  struct zwp_locked_pointer_v1* wl_locked_pointer_ = nullptr;
+  struct zwp_relative_pointer_v1* wl_relative_pointer_ = nullptr;
+  // Synthetic pointer coordinates inside drawing_area_ space, advanced by
+  // relative-motion deltas while the pointer is locked. Seeded to the centre
+  // of drawing_area_ on lock.
+  double wayland_synth_x_ = 0.0;
+  double wayland_synth_y_ = 0.0;
+
   void EnsureWaylandGlobals(struct wl_display* display);
+  void LockWaylandPointer();
+  void UnlockWaylandPointer();
+  static void OnRelativePointerMotion(void* data, struct zwp_relative_pointer_v1* rp,
+                                      uint32_t utime_hi, uint32_t utime_lo,
+                                      wl_fixed_t dx, wl_fixed_t dy,
+                                      wl_fixed_t dx_unaccel, wl_fixed_t dy_unaccel);
 #endif
 };
 

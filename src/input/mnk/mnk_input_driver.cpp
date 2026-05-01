@@ -303,9 +303,12 @@ void MnkInputDriver::UpdateMouseCapture() {
     mouse_captured_ = true;
     attached_window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kHidden);
     attached_window_->CaptureMouse();
-    // Reset deltas to avoid a spike on capture start
+    // Reset deltas and mark that the next OnMouseMove should seed prev_mouse
+    // instead of computing a delta. This prevents a spike when WarpPointer is
+    // a no-op (Wayland) and prev_mouse is stale.
     mouse_dx_ = 0;
     mouse_dy_ = 0;
+    pending_mouse_reset_ = true;
   } else if (!should_capture && mouse_captured_) {
     mouse_captured_ = false;
     attached_window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
@@ -384,6 +387,14 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
   std::lock_guard lock(state_mutex_);
   int32_t x = e.x();
   int32_t y = e.y();
+  if (pending_mouse_reset_) {
+    // Seed prev position without contributing a delta (first event after
+    // capture when WarpPointer was a no-op, e.g. Wayland).
+    pending_mouse_reset_ = false;
+    prev_mouse_x_ = x;
+    prev_mouse_y_ = y;
+    return;
+  }
   mouse_dx_ += x - prev_mouse_x_;
   mouse_dy_ += y - prev_mouse_y_;
   prev_mouse_x_ = x;
