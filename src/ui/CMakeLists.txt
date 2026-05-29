@@ -149,6 +149,67 @@ else()
         ${GTK3_LIBRARIES}
         ${X11_XCB_LIBRARIES}
     )
+
+    if(REXGLUE_ENABLE_WAYLAND)
+        pkg_check_modules(WAYLAND_CLIENT wayland-client)
+        pkg_check_modules(GTK3_WAYLAND gtk+-wayland-3.0)
+        pkg_check_modules(WAYLAND_PROTOCOLS wayland-protocols)
+        find_program(WAYLAND_SCANNER_EXEC NAMES wayland-scanner)
+        if(WAYLAND_CLIENT_FOUND AND GTK3_WAYLAND_FOUND AND WAYLAND_PROTOCOLS_FOUND AND WAYLAND_SCANNER_EXEC)
+            message(STATUS "ReXGlue: native Wayland support enabled")
+            target_compile_definitions(rexui PUBLIC REX_HAS_WAYLAND=1)
+            target_include_directories(rexui PRIVATE ${WAYLAND_CLIENT_INCLUDE_DIRS})
+            target_link_libraries(rexui PUBLIC ${WAYLAND_CLIENT_LIBRARIES})
+
+            # Generate code for unstable protocols needed for relative pointer
+            # motion + cursor lock (required for FPS-style mouse capture on
+            # Wayland, where pointer warping is forbidden).
+            pkg_get_variable(WAYLAND_PROTOCOLS_DIR wayland-protocols pkgdatadir)
+            set(WAYLAND_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/wayland-gen)
+            file(MAKE_DIRECTORY ${WAYLAND_GEN_DIR})
+
+            function(_rexglue_wl_protocol name xml_relpath)
+                set(xml ${WAYLAND_PROTOCOLS_DIR}/${xml_relpath})
+                set(header ${WAYLAND_GEN_DIR}/${name}-client-protocol.h)
+                set(source ${WAYLAND_GEN_DIR}/${name}-protocol.c)
+                add_custom_command(
+                    OUTPUT ${header}
+                    COMMAND ${WAYLAND_SCANNER_EXEC} client-header ${xml} ${header}
+                    DEPENDS ${xml}
+                    VERBATIM)
+                add_custom_command(
+                    OUTPUT ${source}
+                    COMMAND ${WAYLAND_SCANNER_EXEC} private-code ${xml} ${source}
+                    DEPENDS ${xml}
+                    VERBATIM)
+                target_sources(rexui PRIVATE ${header} ${source})
+            endfunction()
+
+            _rexglue_wl_protocol(relative-pointer-unstable-v1 unstable/relative-pointer/relative-pointer-unstable-v1.xml)
+            _rexglue_wl_protocol(pointer-constraints-unstable-v1 unstable/pointer-constraints/pointer-constraints-unstable-v1.xml)
+            target_include_directories(rexui PRIVATE ${WAYLAND_GEN_DIR})
+        else()
+            set(_rexglue_wl_missing "")
+            if(NOT WAYLAND_CLIENT_FOUND)
+                list(APPEND _rexglue_wl_missing "wayland-client (pkg: libwayland-dev / wayland)")
+            endif()
+            if(NOT GTK3_WAYLAND_FOUND)
+                list(APPEND _rexglue_wl_missing "gtk+-wayland-3.0 (pkg: libgtk-3-dev)")
+            endif()
+            if(NOT WAYLAND_PROTOCOLS_FOUND)
+                list(APPEND _rexglue_wl_missing "wayland-protocols (pkg: wayland-protocols)")
+            endif()
+            if(NOT WAYLAND_SCANNER_EXEC)
+                list(APPEND _rexglue_wl_missing "wayland-scanner (pkg: libwayland-bin / wayland)")
+            endif()
+            string(JOIN ", " _rexglue_wl_missing_str ${_rexglue_wl_missing})
+            message(FATAL_ERROR
+                "REXGLUE_ENABLE_WAYLAND is ON but required dependencies are missing: "
+                "${_rexglue_wl_missing_str}. "
+                "Install the missing packages or reconfigure with -DREXGLUE_ENABLE_WAYLAND=OFF "
+                "to build without native Wayland support.")
+        endif()
+    endif()
 endif()
 
 # D3D12 backend dependencies
