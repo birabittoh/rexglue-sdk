@@ -260,11 +260,11 @@ void MnkInputDriver::EnqueueKeystroke(uint16_t vk_pad, bool down) {
 void MnkInputDriver::CenterCursor() {
   if (!attached_window_)
     return;
+#if REX_PLATFORM_WIN32
   int32_t cx = static_cast<int32_t>(attached_window_->GetActualLogicalWidth() / 2);
   int32_t cy = static_cast<int32_t>(attached_window_->GetActualLogicalHeight() / 2);
   prev_mouse_x_ = cx;
   prev_mouse_y_ = cy;
-#if REX_PLATFORM_WIN32
   auto* win32_window = dynamic_cast<rex::ui::Win32Window*>(attached_window_);
   if (win32_window && win32_window->hwnd()) {
     POINT pt = {static_cast<LONG>(cx), static_cast<LONG>(cy)};
@@ -284,9 +284,11 @@ void MnkInputDriver::UpdateMouseCapture() {
     mouse_captured_ = true;
     attached_window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kHidden);
     attached_window_->CaptureMouse();
-    // Reset deltas to avoid a spike on capture start
+    // Reset deltas to avoid a spike on capture start, and mark that the first
+    // motion event should seed prev_mouse rather than compute a delta.
     mouse_dx_ = 0;
     mouse_dy_ = 0;
+    pending_mouse_reset_ = true;
   } else if (!should_capture && mouse_captured_) {
     mouse_captured_ = false;
     attached_window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
@@ -365,6 +367,12 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
   std::lock_guard lock(state_mutex_);
   int32_t x = e.x();
   int32_t y = e.y();
+  if (pending_mouse_reset_) {
+    pending_mouse_reset_ = false;
+    prev_mouse_x_ = x;
+    prev_mouse_y_ = y;
+    return;
+  }
   mouse_dx_ += x - prev_mouse_x_;
   mouse_dy_ += y - prev_mouse_y_;
   prev_mouse_x_ = x;
