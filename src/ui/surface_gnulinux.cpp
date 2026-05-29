@@ -28,5 +28,24 @@ bool XcbWindowSurface::GetSizeImpl(uint32_t& width_out, uint32_t& height_out) co
   return true;
 }
 
+#if REX_HAS_WAYLAND
+
+WaylandWindowSurface::~WaylandWindowSurface() {
+  if (subsurface_) {
+    wl_subsurface_destroy(subsurface_);
+  }
+  if (surface_) {
+    wl_surface_destroy(surface_);
+  }
+}
+
+bool WaylandWindowSurface::GetSizeImpl(uint32_t& width_out, uint32_t& height_out) const {
+  width_out = width_;
+  height_out = height_;
+  return width_ > 0 && height_ > 0;
+}
+
+#endif  // REX_HAS_WAYLAND
+
 }  // namespace ui
 }  // namespace rex

@@ -10,9 +10,16 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <cstdint>
+
+#include <rex/platform.h>
 #include <rex/ui/surface.h>
 
 #include <xcb/xcb.h>
+
+#if REX_HAS_WAYLAND
+#include <wayland-client.h>
+#endif
 
 namespace rex {
 namespace ui {
@@ -32,6 +39,46 @@ class XcbWindowSurface final : public Surface {
   xcb_connection_t* connection_;
   xcb_window_t window_;
 };
+
+#if REX_HAS_WAYLAND
+
+// Owns a dedicated wl_surface + wl_subsurface for Vulkan presentation.
+// On Wayland, the toolkit (GTK) manages the toplevel wl_surface and attaching
+// Vulkan directly to it causes protocol errors. Instead we create a child
+// surface via the compositor and attach it as a subsurface of the parent.
+class WaylandWindowSurface final : public Surface {
+ public:
+  // Takes ownership of child_surface and subsurface (will destroy on dtor).
+  // parent_display is borrowed (not owned).
+  explicit WaylandWindowSurface(wl_display* parent_display, wl_surface* child_surface,
+                                wl_subsurface* subsurface, uint32_t width, uint32_t height)
+      : display_(parent_display),
+        surface_(child_surface),
+        subsurface_(subsurface),
+        width_(width),
+        height_(height) {}
+  ~WaylandWindowSurface() override;
+
+  TypeIndex GetType() const override { return kTypeIndex_WaylandSurface; }
+  wl_display* display() const { return display_; }
+  wl_surface* surface() const { return surface_; }
+  void SetSize(uint32_t width, uint32_t height) {
+    width_ = width;
+    height_ = height;
+  }
+
+ protected:
+  bool GetSizeImpl(uint32_t& width_out, uint32_t& height_out) const override;
+
+ private:
+  wl_display* display_;
+  wl_surface* surface_;        // owned
+  wl_subsurface* subsurface_;  // owned
+  uint32_t width_;
+  uint32_t height_;
+};
+
+#endif  // REX_HAS_WAYLAND
 
 }  // namespace ui
 }  // namespace rex
