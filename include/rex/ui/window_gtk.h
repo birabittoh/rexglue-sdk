@@ -22,8 +22,16 @@
 #include <gtk/gtk.h>
 #include <xcb/xcb.h>
 
+#if REX_HAS_WAYLAND
+#include <wayland-client.h>
+#endif
+
 namespace rex {
 namespace ui {
+
+#if REX_HAS_WAYLAND
+class WaylandWindowSurface;
+#endif
 
 class GTKWindow : public Window {
   using super = Window;
@@ -79,6 +87,18 @@ class GTKWindow : public Window {
   uint32_t batched_size_update_depth_ = 0;
   bool batched_size_update_contained_configure_ = false;
   bool batched_size_update_contained_draw_ = false;
+
+#if REX_HAS_WAYLAND
+  // Non-owning pointer to the active Wayland surface, kept in sync with
+  // presenter_surface_ so HandleSizeUpdate can push physical pixel dimensions.
+  WaylandWindowSurface* wayland_surface_ = nullptr;
+  // Wayland globals needed for subsurface creation. Bound once on first use.
+  struct wl_compositor* wl_compositor_ = nullptr;
+  struct wl_subcompositor* wl_subcompositor_ = nullptr;
+  bool wayland_globals_bound_ = false;
+
+  void EnsureWaylandGlobals(struct wl_display* display);
+#endif
 };
 
 class GTKMenuItem : public MenuItem {

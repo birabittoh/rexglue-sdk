@@ -11,6 +11,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <string>
@@ -18,16 +19,22 @@
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
-#include <rex/platform/env.h>
 #include <rex/ui/windowed_app.h>
 #include <rex/ui/windowed_app_context_gtk.h>
 
 #include <gtk/gtk.h>
 
 extern "C" int main(int argc_pre_gtk, char** argv_pre_gtk) {
-  // Before touching anything GTK+, make sure that when running on Wayland,
-  // we'll still get an X11 (Xwayland) window
-  rex::platform::env::set("GDK_BACKEND", "x11");
+  // Prefer Wayland on Wayland sessions; respect explicit GDK_BACKEND override.
+  // On X11/Xorg sessions GTK picks X11 automatically — no forcing needed.
+  if (!std::getenv("GDK_BACKEND")) {
+    const char* session_type = std::getenv("XDG_SESSION_TYPE");
+    const bool wayland_session = std::getenv("WAYLAND_DISPLAY") ||
+                                 (session_type && std::strcmp(session_type, "wayland") == 0);
+    if (wayland_session) {
+      gdk_set_allowed_backends("wayland,x11");
+    }
+  }
 
   // Initialize GTK+, which will handle and remove its own arguments from argv.
   // Both GTK+ and Xenia use --option=value argument format (see man
