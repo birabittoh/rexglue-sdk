@@ -599,6 +599,10 @@ void ApplyEnvironment() {
 void FinalizeInit() {
   std::lock_guard lock(g_mutex);
   g_finalized = true;
+  for (const auto& [name, values] : GetPendingValuesStorage()) {
+    (void)values;
+    REXLOG_WARN("Config: unknown cvar '{}'", name);
+  }
   REXLOG_DEBUG("cvar: initialization finalized");
 }
 
@@ -640,6 +644,8 @@ ScopedLifecycleOverride::~ScopedLifecycleOverride() {
 void ResetAllForTesting() {
   ResetAllToDefaults();
   ClearPendingRestartFlags();
+  GetPendingValuesStorage().clear();
+  g_init_done = false;
   g_finalized = false;
 }
 
