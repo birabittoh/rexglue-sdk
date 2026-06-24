@@ -221,6 +221,12 @@ void* WindowSDL::GetNativeWindowHandle() const {
 #endif
 }
 
+void WindowSDL::WarpMouseInWindow(int32_t x, int32_t y) {
+  if (sdl_window_) {
+    SDL_WarpMouseInWindow(sdl_window_, float(x), float(y));
+  }
+}
+
 uint32_t WindowSDL::GetLatestDpiImpl() const {
   float scale = sdl_window_ ? SDL_GetWindowDisplayScale(sdl_window_)
                             : SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
@@ -246,10 +252,16 @@ void WindowSDL::ApplyNewTitle() {
 
 void WindowSDL::ApplyNewMouseCapture() {
   SDL_CaptureMouse(true);
+  if (sdl_window_) {
+    SDL_StopTextInput(sdl_window_);
+  }
 }
 
 void WindowSDL::ApplyNewMouseRelease() {
   SDL_CaptureMouse(false);
+  if (sdl_window_) {
+    SDL_StartTextInput(sdl_window_);
+  }
 }
 
 void WindowSDL::ApplyNewCursorVisibility(CursorVisibility old_cursor_visibility) {
