@@ -272,6 +272,8 @@ void MnkInputDriver::CenterCursor() {
     ClientToScreen(hwnd, &pt);
     SetCursorPos(pt.x, pt.y);
   }
+#else
+  attached_window_->WarpMouseInWindow(cx, cy);
 #endif
 }
 
