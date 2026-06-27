@@ -19,6 +19,10 @@
 #include <rex/system/xam/app_manager.h>
 #include <rex/thread/mutex.h>
 
+namespace rex::audio {
+class WmaPlayer;
+}  // namespace rex::audio
+
 namespace rex {
 namespace kernel {
 namespace xam {
@@ -71,6 +75,7 @@ class XmpApp : public system::xam::App {
   };
 
   explicit XmpApp(system::KernelState* kernel_state);
+  ~XmpApp();
 
   X_HRESULT XMPGetStatus(uint32_t status_ptr);
 
@@ -95,6 +100,15 @@ class XmpApp : public system::xam::App {
   static const uint32_t kMsgPlaybackControllerChanged = 0x0A000003;
 
   void OnStateChanged();
+
+  // Reads a guest file (by its XMP song file path) into |out|. Returns false on
+  // failure.
+  bool ReadSongFile(const std::u16string& guest_path, std::vector<uint8_t>& out);
+  // Decodes/streams the active playlist's songs (starting at active_song_index_)
+  // through the WMA player. Real BGM output for titles that use XMP playlists.
+  void StartActivePlaylist();
+
+  std::unique_ptr<rex::audio::WmaPlayer> wma_player_;
 
   State state_;
   PlaybackClient playback_client_;

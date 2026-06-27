@@ -10,7 +10,15 @@
  */
 
 #include <rex/kernel/xam/apps/xmp_app.h>
+
+#include <vector>
+
+#include <rex/audio/wma_player.h>
+#include <rex/filesystem.h>
+#include <rex/filesystem/file.h>
+#include <rex/filesystem/vfs.h>
 #include <rex/logging.h>
+#include <rex/string/utf8.h>
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
 
@@ -34,6 +42,83 @@ XmpApp::XmpApp(KernelState* kernel_state)
       active_song_index_(0),
       next_playlist_handle_(1),
       next_song_handle_(1) {}
+
+XmpApp::~XmpApp() = default;
+
+bool XmpApp::ReadSongFile(const std::u16string& guest_path, std::vector<uint8_t>& out) {
+  std::string path = rex::string::to_utf8(guest_path);
+  if (path.empty()) {
+    return false;
+  }
+  rex::filesystem::File* file = nullptr;
+  rex::filesystem::FileAction action;
+  X_STATUS status = kernel_state_->file_system()->OpenFile(
+      nullptr, path, rex::filesystem::FileDisposition::kOpen,
+      rex::filesystem::FileAccess::kFileReadData, false, true, &file, &action);
+  if (XFAILED(status) || !file) {
+    REXKRNL_WARN("XMP: could not open BGM file '{}' (status {:08X})", path, status);
+    return false;
+  }
+
+  size_t size = file->entry() ? file->entry()->size() : 0;
+  if (size == 0) {
+    file->Destroy();
+    REXKRNL_WARN("XMP: BGM file '{}' is empty", path);
+    return false;
+  }
+
+  out.resize(size);
+  size_t total = 0;
+  while (total < size) {
+    size_t bytes_read = 0;
+    X_STATUS rs =
+        file->ReadSync(std::span<uint8_t>(out.data() + total, size - total), total, &bytes_read);
+    if (XFAILED(rs) || bytes_read == 0) {
+      break;
+    }
+    total += bytes_read;
+  }
+  file->Destroy();
+
+  if (total != size) {
+    REXKRNL_WARN("XMP: short read on BGM file '{}' ({} of {})", path, total, size);
+    out.resize(total);
+  }
+  return !out.empty();
+}
+
+void XmpApp::StartActivePlaylist() {
+  if (!active_playlist_ || active_playlist_->songs.empty()) {
+    return;
+  }
+  if (playback_client_ == PlaybackClient::kSystem) {
+    return;
+  }
+
+  std::vector<std::vector<uint8_t>> buffers;
+  buffers.reserve(active_playlist_->songs.size());
+  for (auto& song : active_playlist_->songs) {
+    std::vector<uint8_t> data;
+    if (!ReadSongFile(song->file_path, data)) {
+      buffers.clear();
+      break;
+    }
+    buffers.emplace_back(std::move(data));
+  }
+  if (buffers.empty()) {
+    REXKRNL_WARN("XMP: no BGM tracks could be loaded; music will be silent");
+    return;
+  }
+
+  if (!wma_player_) {
+    wma_player_ = std::make_unique<rex::audio::WmaPlayer>();
+  }
+  size_t start = active_song_index_ >= 0 ? static_cast<size_t>(active_song_index_) : 0;
+  wma_player_->PlayPlaylist(std::move(buffers), start);
+  wma_player_->SetVolume(volume_);
+  REXKRNL_INFO("XMP: started BGM playlist '{}' ({} song(s))",
+               rex::string::to_utf8(active_playlist_->name), active_playlist_->songs.size());
+}
 
 X_HRESULT XmpApp::XMPGetStatus(uint32_t state_ptr) {
   if (!XThread::GetCurrentThread()->main_thread()) {
@@ -134,11 +219,10 @@ X_HRESULT XmpApp::XMPPlayTitlePlaylist(uint32_t playlist_handle, uint32_t song_h
     return X_E_SUCCESS;
   }
 
-  // Start playlist?
-  REXKRNL_WARN("Playlist playback not supported");
   active_playlist_ = playlist;
   active_song_index_ = 0;
   state_ = State::kPlaying;
+  StartActivePlaylist();
   OnStateChanged();
   kernel_state_->BroadcastNotification(kMsgPlaybackBehaviorChanged, 1);
   return X_E_SUCCESS;
@@ -148,6 +232,9 @@ X_HRESULT XmpApp::XMPContinue() {
   REXKRNL_DEBUG("XMPContinue()");
   if (state_ == State::kPaused) {
     state_ = State::kPlaying;
+  }
+  if (wma_player_) {
+    wma_player_->Resume();
   }
   OnStateChanged();
   return X_E_SUCCESS;
@@ -159,6 +246,9 @@ X_HRESULT XmpApp::XMPStop(uint32_t unk) {
   active_playlist_ = nullptr;  // ?
   active_song_index_ = 0;
   state_ = State::kIdle;
+  if (wma_player_) {
+    wma_player_->Stop();
+  }
   OnStateChanged();
   return X_E_SUCCESS;
 }
@@ -167,6 +257,9 @@ X_HRESULT XmpApp::XMPPause() {
   REXKRNL_DEBUG("XMPPause()");
   if (state_ == State::kPlaying) {
     state_ = State::kPaused;
+  }
+  if (wma_player_) {
+    wma_player_->Pause();
   }
   OnStateChanged();
   return X_E_SUCCESS;
@@ -179,6 +272,7 @@ X_HRESULT XmpApp::XMPNext() {
   }
   state_ = State::kPlaying;
   active_song_index_ = (active_song_index_ + 1) % active_playlist_->songs.size();
+  StartActivePlaylist();
   OnStateChanged();
   return X_E_SUCCESS;
 }
@@ -194,6 +288,7 @@ X_HRESULT XmpApp::XMPPrevious() {
   } else {
     --active_song_index_;
   }
+  StartActivePlaylist();
   OnStateChanged();
   return X_E_SUCCESS;
 }
@@ -298,6 +393,9 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       assert_true(args->xmp_client == 0x00000002);
       REXKRNL_DEBUG("XMPSetVolume({:g})", float(args->value));
       volume_ = args->value;
+      if (wma_player_) {
+        wma_player_->SetVolume(volume_);
+      }
       return X_E_SUCCESS;
     }
     case 0x0007000D: {
