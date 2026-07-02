@@ -83,6 +83,8 @@ class GraphicsSystem : public system::IGraphicsSystem {
   void InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
                                bool blocking) override;
 
+  void InitializeAssetReplacement(const system::AssetReplacementConfig& config) override;
+
   bool is_paused() const { return paused_; }
   void Pause();
   void Resume();
