@@ -26,6 +26,7 @@
 #include <rex/ui/imgui_drawer.h>
 #include <rex/ui/immediate_drawer.h>
 #include <rex/ui/overlay/debug_overlay.h>
+#include <rex/ui/overlay/shader_debugger_overlay.h>
 #include <rex/ui/window.h>
 #include <rex/ui/window_listener.h>
 #include <rex/ui/windowed_app.h>
@@ -50,6 +51,7 @@ namespace ui {
 class AchievementNotificationDialog;
 class ConsoleDialog;
 class SettingsDialog;
+class ShaderDebuggerDialog;
 }  // namespace ui
 
 /// Base class for recompiled Xbox 360 applications.
@@ -265,6 +267,17 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   /// frame rate graphs. For numbers only the app can measure.
   void SetDebugOverlayDetails(ui::DebugOverlayDialog::DetailProvider provider);
 
+  // Overrides the shader debugger overlay's (F2) data source.
+  struct ShaderDebuggerOverride {
+    ui::ShaderDebuggerDialog::SnapshotProvider snapshot_provider;
+    ui::ShaderDebuggerDialog::DisableSetter disable_setter;
+    ui::ShaderDebuggerDialog::DetailsProvider details_provider;
+    ui::ShaderDebuggerDialog::BinaryReplacer binary_replacer;
+    ui::ShaderDebuggerDialog::ProfilingToggle profiling_toggle;
+    ui::ShaderDebuggerDialog::ProfilingResetter profiling_resetter;
+  };
+  void SetShaderDebuggerOverride(ShaderDebuggerOverride override);
+
  private:
   std::function<void(PathConfig)> MakeResumeCallback();
 
@@ -313,8 +326,10 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   std::unique_ptr<ui::ImGuiDialog> achievements_overlay_;
   std::shared_ptr<ui::AchievementNotificationDialog> achievement_notification_;
   uint64_t achievement_notification_listener_ = 0;
+  std::unique_ptr<ui::ShaderDebuggerDialog> shader_debugger_overlay_;
   ui::DebugOverlayDialog::FrameStatsProvider frame_stats_provider_;
   ui::DebugOverlayDialog::DetailProvider frame_detail_provider_;
+  ShaderDebuggerOverride shader_debugger_override_;
   std::filesystem::path config_path_;
 };
 

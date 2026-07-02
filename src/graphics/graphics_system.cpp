@@ -364,6 +364,11 @@ void GraphicsSystem::InitializeShaderStorage(const std::filesystem::path& cache_
   }
 }
 
+void GraphicsSystem::InitializeAssetReplacement(const system::AssetReplacementConfig& config) {
+  command_processor_->CallInThread(
+      [this, config]() { command_processor_->InitializeAssetReplacement(config); });
+}
+
 void GraphicsSystem::Pause() {
   paused_ = true;
   command_processor_->Pause();
