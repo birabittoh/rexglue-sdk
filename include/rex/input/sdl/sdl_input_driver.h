@@ -15,6 +15,7 @@
 #include <atomic>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <vector>
 
 #include <rex/input/input_driver.h>
@@ -76,6 +77,7 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   std::unique_lock<std::mutex> DrainAndLock();
   void ProcessEventLocked(const SDL_Event& event);
   void OnControllerDeviceAddedLocked(const SDL_Event& event);
+  void OnControllerOpenedAsync(SDL_JoystickID instance_id, SDL_Gamepad* controller);
   void OnControllerDeviceRemovedLocked(const SDL_Event& event);
   void OnControllerDeviceAxisMotionLocked(const SDL_Event& event);
   void OnControllerDeviceButtonChangedLocked(const SDL_Event& event);
@@ -94,6 +96,11 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   std::atomic<bool> sdl_pumpevents_queued_;
   std::array<ControllerState, HID_SDL_USER_COUNT> controllers_;
   std::mutex controllers_mutex_;
+  // Instance IDs currently being opened on a background thread. SDL_OpenGamepad
+  // can block for a long time (e.g. a stalled Bluetooth HID handshake), so it
+  // must never run on a thread that also drives game logic. Guarded by
+  // controllers_mutex_.
+  std::set<SDL_JoystickID> pending_opens_;
   std::mutex event_queue_mutex_;
   std::vector<SDL_Event> pending_events_;
   std::array<KeystrokeState, HID_SDL_USER_COUNT> keystroke_states_;
