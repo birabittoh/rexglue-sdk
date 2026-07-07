@@ -398,6 +398,11 @@ bool ReXApp::SetupPresentation() {
   if (REXCVAR_GET(fullscreen)) {
     window_->SetFullscreen(true);
   }
+  rex::cvar::RegisterChangeCallback("fullscreen", [this](std::string_view, std::string_view value) {
+    if (window_) {
+      window_->SetFullscreen(value == "true");
+    }
+  });
   window_->Open();
 
   auto* graphics_system = config_.graphics.get();
