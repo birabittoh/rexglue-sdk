@@ -18,6 +18,7 @@
 #include <rex/ui/window.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 
@@ -151,51 +152,10 @@ X_RESULT MnkInputDriver::GetState(uint32_t user_index, X_INPUT_STATE* out_state)
 
   std::lock_guard lock(state_mutex_);
 
-  uint16_t buttons = 0;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_a)))
-    buttons |= X_INPUT_GAMEPAD_A;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_b)))
-    buttons |= X_INPUT_GAMEPAD_B;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_x)))
-    buttons |= X_INPUT_GAMEPAD_X;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_y)))
-    buttons |= X_INPUT_GAMEPAD_Y;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_left_shoulder)))
-    buttons |= X_INPUT_GAMEPAD_LEFT_SHOULDER;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_right_shoulder)))
-    buttons |= X_INPUT_GAMEPAD_RIGHT_SHOULDER;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_press)))
-    buttons |= X_INPUT_GAMEPAD_LEFT_THUMB;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_press)))
-    buttons |= X_INPUT_GAMEPAD_RIGHT_THUMB;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_back)))
-    buttons |= X_INPUT_GAMEPAD_BACK;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_start)))
-    buttons |= X_INPUT_GAMEPAD_START;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_guide)))
-    buttons |= X_INPUT_GAMEPAD_GUIDE;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_dpad_up)))
-    buttons |= X_INPUT_GAMEPAD_DPAD_UP;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_dpad_down)))
-    buttons |= X_INPUT_GAMEPAD_DPAD_DOWN;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_dpad_left)))
-    buttons |= X_INPUT_GAMEPAD_DPAD_LEFT;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_dpad_right)))
-    buttons |= X_INPUT_GAMEPAD_DPAD_RIGHT;
-
-  uint8_t lt = IsBindPressed(key_down_, REXCVAR_GET(keybind_left_trigger)) ? 0xFF : 0;
-  uint8_t rt = IsBindPressed(key_down_, REXCVAR_GET(keybind_right_trigger)) ? 0xFF : 0;
-
-  int32_t lx = 0;
-  int32_t ly = 0;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_left)))
-    lx -= INT16_MAX;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_right)))
-    lx += INT16_MAX;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_up)))
-    ly += INT16_MAX;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_down)))
-    ly -= INT16_MAX;
+  uint16_t buttons;
+  uint8_t lt, rt;
+  int32_t lx, ly;
+  ComputeDigitalGamepad(buttons, lt, rt, lx, ly);
 
   double sensitivity = REXCVAR_GET(mnk_sensitivity);
   constexpr double kBaseScale = 200.0;
@@ -230,30 +190,158 @@ X_RESULT MnkInputDriver::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibrat
   return X_ERROR_SUCCESS;
 }
 
+// Mirrors SDLInputDriver's kVkLookup (bits 0-25: real buttons, trigger
+// pseudo-buttons, then left-stick direction pseudo-buttons). Right-stick
+// pseudo-buttons (26-33) aren't meaningful for MnK (mouse look isn't menu
+// navigation), so ComputeKeystrokeKeyfield() never sets those bits.
+static constexpr std::array<VirtualKey, 26> kMnkKeystrokeVkLookup = {
+    VirtualKey::kXInputPadDpadUp,
+    VirtualKey::kXInputPadDpadDown,
+    VirtualKey::kXInputPadDpadLeft,
+    VirtualKey::kXInputPadDpadRight,
+    VirtualKey::kXInputPadStart,
+    VirtualKey::kXInputPadBack,
+    VirtualKey::kXInputPadLThumbPress,
+    VirtualKey::kXInputPadRThumbPress,
+    VirtualKey::kXInputPadLShoulder,
+    VirtualKey::kXInputPadRShoulder,
+    VirtualKey::kNone, /* Guide has no VK */
+    VirtualKey::kNone, /* Unknown */
+    VirtualKey::kXInputPadA,
+    VirtualKey::kXInputPadB,
+    VirtualKey::kXInputPadX,
+    VirtualKey::kXInputPadY,
+    VirtualKey::kXInputPadLTrigger,
+    VirtualKey::kXInputPadRTrigger,
+    VirtualKey::kXInputPadLThumbUp,
+    VirtualKey::kXInputPadLThumbDown,
+    VirtualKey::kXInputPadLThumbRight,
+    VirtualKey::kXInputPadLThumbLeft,
+    VirtualKey::kXInputPadLThumbUpLeft,
+    VirtualKey::kXInputPadLThumbUpRight,
+    VirtualKey::kXInputPadLThumbDownRight,
+    VirtualKey::kXInputPadLThumbDownLeft,
+};
+
+void MnkInputDriver::ComputeDigitalGamepad(uint16_t& buttons, uint8_t& lt, uint8_t& rt, int32_t& lx,
+                                           int32_t& ly) const {
+  buttons = 0;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_a)))
+    buttons |= X_INPUT_GAMEPAD_A;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_b)))
+    buttons |= X_INPUT_GAMEPAD_B;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_x)))
+    buttons |= X_INPUT_GAMEPAD_X;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_y)))
+    buttons |= X_INPUT_GAMEPAD_Y;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_left_shoulder)))
+    buttons |= X_INPUT_GAMEPAD_LEFT_SHOULDER;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_right_shoulder)))
+    buttons |= X_INPUT_GAMEPAD_RIGHT_SHOULDER;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_press)))
+    buttons |= X_INPUT_GAMEPAD_LEFT_THUMB;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_press)))
+    buttons |= X_INPUT_GAMEPAD_RIGHT_THUMB;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_back)))
+    buttons |= X_INPUT_GAMEPAD_BACK;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_start)))
+    buttons |= X_INPUT_GAMEPAD_START;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_guide)))
+    buttons |= X_INPUT_GAMEPAD_GUIDE;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_dpad_up)))
+    buttons |= X_INPUT_GAMEPAD_DPAD_UP;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_dpad_down)))
+    buttons |= X_INPUT_GAMEPAD_DPAD_DOWN;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_dpad_left)))
+    buttons |= X_INPUT_GAMEPAD_DPAD_LEFT;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_dpad_right)))
+    buttons |= X_INPUT_GAMEPAD_DPAD_RIGHT;
+
+  lt = IsBindPressed(key_down_, REXCVAR_GET(keybind_left_trigger)) ? 0xFF : 0;
+  rt = IsBindPressed(key_down_, REXCVAR_GET(keybind_right_trigger)) ? 0xFF : 0;
+
+  lx = 0;
+  ly = 0;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_left)))
+    lx -= INT16_MAX;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_right)))
+    lx += INT16_MAX;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_up)))
+    ly += INT16_MAX;
+  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_down)))
+    ly -= INT16_MAX;
+}
+
+uint64_t MnkInputDriver::ComputeKeystrokeKeyfield() const {
+  uint16_t buttons;
+  uint8_t lt, rt;
+  int32_t lx, ly;
+  ComputeDigitalGamepad(buttons, lt, rt, lx, ly);
+
+  uint64_t f = buttons;
+  f |= uint64_t(lt > 0) << 16;
+  f |= uint64_t(rt > 0) << 17;
+
+  bool u = ly > 0, d = ly < 0, r = lx > 0, l = lx < 0;
+  if (u && l) {
+    u = l = false;
+    f |= uint64_t(1) << 22;
+  }
+  if (u && r) {
+    u = r = false;
+    f |= uint64_t(1) << 23;
+  }
+  if (d && r) {
+    d = r = false;
+    f |= uint64_t(1) << 24;
+  }
+  if (d && l) {
+    d = l = false;
+    f |= uint64_t(1) << 25;
+  }
+  f |= uint64_t(u) << 18;
+  f |= uint64_t(d) << 19;
+  f |= uint64_t(r) << 20;
+  f |= uint64_t(l) << 21;
+  return f;
+}
+
 X_RESULT MnkInputDriver::GetKeystroke(uint32_t user_index, uint32_t flags,
                                       X_INPUT_KEYSTROKE* out_keystroke) {
   if (!IsEnabled() || user_index != UserIndex()) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
-  std::lock_guard lock(state_mutex_);
-  if (keystroke_queue_.empty()) {
-    return X_ERROR_EMPTY;
+  if (!out_keystroke) {
+    return X_ERROR_BAD_ARGUMENTS;
   }
-  if (out_keystroke) {
-    *out_keystroke = keystroke_queue_.front();
-  }
-  keystroke_queue_.pop();
-  return X_ERROR_SUCCESS;
-}
 
-void MnkInputDriver::EnqueueKeystroke(uint16_t vk_pad, bool down) {
-  X_INPUT_KEYSTROKE ks = {};
-  ks.virtual_key = vk_pad;
-  ks.unicode = 0;
-  ks.flags = down ? X_INPUT_KEYSTROKE_KEYDOWN : X_INPUT_KEYSTROKE_KEYUP;
-  ks.user_index = static_cast<uint8_t>(UserIndex());
-  ks.hid_code = 0;
-  keystroke_queue_.push(ks);
+  std::lock_guard lock(state_mutex_);
+
+  // Force everything "unpressed" while gated, same as GetState - this also
+  // makes the loop below emit KEYUP events for anything that was held when
+  // the gate closed.
+  uint64_t curr_keyfield = (is_active() && has_focus_) ? ComputeKeystrokeKeyfield() : 0;
+  uint64_t changed = curr_keyfield ^ last_keystroke_keyfield_;
+
+  for (uint8_t i = 0; i < uint8_t(kMnkKeystrokeVkLookup.size()); i++) {
+    uint64_t bit = uint64_t(1) << i;
+    if (!(changed & bit)) {
+      continue;
+    }
+    VirtualKey vk = kMnkKeystrokeVkLookup[i];
+    last_keystroke_keyfield_ ^= bit;
+    if (vk == VirtualKey::kNone) {
+      continue;
+    }
+    bool is_pressed = (curr_keyfield & bit) != 0;
+    out_keystroke->virtual_key = uint16_t(vk);
+    out_keystroke->unicode = 0;
+    out_keystroke->user_index = static_cast<uint8_t>(user_index);
+    out_keystroke->hid_code = 0;
+    out_keystroke->flags = is_pressed ? X_INPUT_KEYSTROKE_KEYDOWN : X_INPUT_KEYSTROKE_KEYUP;
+    return X_ERROR_SUCCESS;
+  }
+  return X_ERROR_EMPTY;
 }
 
 void MnkInputDriver::CenterCursor() {

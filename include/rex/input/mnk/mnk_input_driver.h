@@ -15,7 +15,6 @@
 
 #include <cstdint>
 #include <mutex>
-#include <queue>
 #include <string>
 
 namespace rex::input::mnk {
@@ -56,7 +55,15 @@ class MnkInputDriver final : public InputDriver,
   void CenterCursor();
   void UpdateMouseCapture();
   void SetKeyState(uint16_t vk, bool down);
-  void EnqueueKeystroke(uint16_t vk_pad, bool down);
+  // Computes the digital gamepad state (buttons/triggers/left stick) from
+  // key_down_. Caller must hold state_mutex_.
+  void ComputeDigitalGamepad(uint16_t& buttons, uint8_t& lt, uint8_t& rt, int32_t& lx,
+                             int32_t& ly) const;
+  // Builds the same button+trigger+stick-direction bitfield used by
+  // GetKeystroke's edge detection (mirrors SDLInputDriver::AnalogToKeyfield,
+  // but sourced from key_down_ instead of a real gamepad). Caller must hold
+  // state_mutex_.
+  uint64_t ComputeKeystrokeKeyfield() const;
 
   rex::ui::Window* attached_window_ = nullptr;
 
@@ -71,8 +78,9 @@ class MnkInputDriver final : public InputDriver,
   bool mouse_captured_ = false;
   bool has_focus_ = true;
 
-  // Keystroke queue
-  std::queue<X_INPUT_KEYSTROKE> keystroke_queue_;
+  // Last keyfield seen by GetKeystroke, for edge detection (see
+  // ComputeKeystrokeKeyfield).
+  uint64_t last_keystroke_keyfield_ = 0;
 
   // Packet number incremented on state change
   uint32_t packet_number_ = 0;

@@ -152,9 +152,14 @@ X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
     if (result != X_ERROR_DEVICE_NOT_CONNECTED) {
       any_connected = true;
     }
-    if (result == X_ERROR_SUCCESS || result == X_ERROR_EMPTY) {
+    if (result == X_ERROR_SUCCESS) {
+      // Found an actual keystroke event - stop here so a later driver's
+      // (lack of) events doesn't overwrite out_keystroke.
       return result;
     }
+    // X_ERROR_EMPTY just means *this* driver has nothing pending right now;
+    // keep checking the rest so one idle driver (e.g. a real gamepad sitting
+    // still) doesn't starve another driver's (e.g. MnK's) pending keystrokes.
   }
   return any_connected ? X_ERROR_EMPTY : X_ERROR_DEVICE_NOT_CONNECTED;
 }
