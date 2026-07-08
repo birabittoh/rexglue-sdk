@@ -1,13 +1,27 @@
 set(REXSYSTEM_SOURCES
     # Small, self-contained PM4/register format helpers reused by the
-    # headless ring-buffer decode instrumentation in kernel_state.cpp.
-    # NOTE: the rest of the Xenos GPU format layer lives in the
-    # rexgpu-xenos plugin, which is runtime-loaded and never linked here --
-    # only these two translation units are safe to duplicate into the
-    # always-linked runtime because they have no dependency on plugin-only
-    # code (command_processor, shader translation, etc).
+    # headless ring-buffer decode instrumentation in kernel_state.cpp, plus
+    # (below) the Xenos microcode -> SPIR-V translation layer reused by
+    # NocturneRecomp's native (non-xenos) command processor. NOTE: the rest
+    # of the Xenos GPU stack (CommandProcessor, caches, GraphicsSystem)
+    # lives in the rexgpu-xenos plugin, which is runtime-loaded and never
+    # linked here -- only translation units with no dependency on that
+    # plugin-only code are safe to duplicate into the always-linked runtime.
     ../graphics/register_file.cpp
     ../graphics/packet_disassembler.cpp
+    ../graphics/flags.cpp
+    ../graphics/format/ucode.cpp
+    ../graphics/pipeline/shader/shader.cpp
+    ../graphics/pipeline/shader/translator.cpp
+    ../graphics/pipeline/shader/translator_disasm.cpp
+    ../graphics/shader_translation_support.cpp
+    ../graphics/pipeline/shader/spirv_builder.cpp
+    ../graphics/pipeline/shader/spirv.cpp
+    ../graphics/pipeline/shader/spirv_translator.cpp
+    ../graphics/pipeline/shader/spirv_translator_alu.cpp
+    ../graphics/pipeline/shader/spirv_translator_fetch.cpp
+    ../graphics/pipeline/shader/spirv_translator_memexport.cpp
+    ../graphics/pipeline/shader/spirv_translator_rb.cpp
 
     runtime.cpp
     embedded_metadata.cpp
@@ -114,6 +128,17 @@ if(REXGLUE_USE_VULKAN)
         volk::volk
         GPUOpen::VulkanMemoryAllocator
         SPIRV-Tools-static
+    )
+    # For the Xenos microcode -> SPIR-V translator sources above
+    # (spirv_builder.cpp/spirv_translator*.cpp), mirroring rexgpu-xenos's own
+    # link libraries for the same translation units.
+    target_link_libraries(rexruntime PRIVATE
+        glslang::SPIRV
+        glslang
+        MachineIndependent
+        GenericCodeGen
+        OSDependent
+        OGLCompiler
     )
     target_compile_definitions(rexruntime PUBLIC REX_HAS_VULKAN=1)
 endif()
