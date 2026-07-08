@@ -23,10 +23,15 @@
 #include <rex/stream.h>
 #include <rex/thread/atomic.h>
 #include <rex/string.h>
+#include <rex/chrono/clock.h>
 #include <rex/kernel/xboxkrnl/threading.h>
+#include <rex/kernel/xboxkrnl/video.h>
+#include <rex/memory/utils.h>
 #include <rex/system/kernel_module.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/function_dispatcher.h>
+#include <rex/system/xvideo.h>
+#include <rex/thread.h>
 #include <chrono>
 #include <thread>
 
@@ -161,6 +166,13 @@ void KernelState::SetProcessTLSVars(X_KPROCESS* process, uint32_t num_slots, uin
 
 KernelState::~KernelState() {
   app_manager_.reset();
+
+  // Stop the headless vblank thread before touching the object table.
+  if (headless_vblank_thread_) {
+    headless_vblank_thread_running_ = false;
+    headless_vblank_thread_->Wait(0, 0, 0, nullptr);
+    headless_vblank_thread_.reset();
+  }
 
   // Stop the dispatch thread before touching the object table
   if (dispatch_thread_running_) {
@@ -1254,6 +1266,136 @@ void KernelState::EndDPCImpersonation(const DPCImpersonationScope& scope) {
   auto pcr = memory_->TranslateVirtual<X_KPCR*>(static_cast<uint32_t>(ctx->r13.u64));
   pcr->prcb_data.dpc_active = 0;
   pcr->current_irql = scope.previous_irql_;
+}
+
+void KernelState::SetGraphicsInterruptCallback(uint32_t callback, uint32_t user_data) {
+  graphics_interrupt_callback_.store(callback, std::memory_order_release);
+  graphics_interrupt_callback_data_ = user_data;
+  StartHeadlessVblankThreadIfNeeded();
+}
+
+void KernelState::DispatchGraphicsInterruptCallback(uint32_t source, uint32_t cpu) {
+  uint32_t callback = graphics_interrupt_callback_.load(std::memory_order_acquire);
+  if (!callback) {
+    return;
+  }
+
+  auto thread = XThread::GetCurrentThread();
+  assert_not_null(thread);
+
+  if (cpu == 0xFFFFFFFF) {
+    cpu = 2;
+  }
+  thread->SetActiveCpu(static_cast<uint8_t>(cpu));
+
+  uint64_t args[] = {source, graphics_interrupt_callback_data_};
+  function_dispatcher_->ExecuteInterrupt(thread->thread_state(), callback, args,
+                                         rex::countof(args));
+}
+
+void KernelState::EnableHeadlessRingBufferWriteBack(uint32_t ptr, uint32_t block_size_log2) {
+  ring_buffer_rptr_writeback_ptr_.store(ptr, std::memory_order_release);
+  InstallHeadlessGpuMmioIfNeeded();
+}
+
+void KernelState::InstallHeadlessGpuMmioIfNeeded() {
+  if (headless_gpu_mmio_installed_.exchange(true)) {
+    return;
+  }
+  // Mirrors GraphicsSystem::SetupGuestGpu's MMIO registration (GPU registers
+  // at 0x7FC80000-0x7FCFFFFF), so guest ring-buffer writes still land
+  // somewhere sane when there's no GraphicsSystem to normally own this range.
+  memory_->AddVirtualMappedRange(
+      0x7FC80000, 0xFFFF0000, 0x0000FFFF, this,
+      reinterpret_cast<runtime::MMIOReadCallback>(HeadlessReadRegisterThunk),
+      reinterpret_cast<runtime::MMIOWriteCallback>(HeadlessWriteRegisterThunk));
+}
+
+void KernelState::HeadlessWriteRegisterThunk(void* ppc_context, KernelState* kernel_state,
+                                             uint32_t addr, uint32_t value) {
+  kernel_state->HeadlessWriteRegister(addr, value);
+}
+
+uint32_t KernelState::HeadlessReadRegisterThunk(void* ppc_context, KernelState* kernel_state,
+                                                uint32_t addr) {
+  return kernel_state->HeadlessReadRegister(addr);
+}
+
+void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
+  uint32_t r = (addr & 0xFFFF) / 4;
+  if (r == 0x01C5) {  // CP_RB_WPTR
+    // No real GPU is draining the ring buffer, so make it look infinitely
+    // fast: immediately mirror the just-submitted write pointer back into
+    // the read-pointer write-back address, exactly as if the GPU had
+    // already caught up. This is what unblocks guest code that spins
+    // waiting for read/write pointers to match (see VdEnableRingBufferRPtrWriteBack).
+    uint32_t writeback_ptr = ring_buffer_rptr_writeback_ptr_.load(std::memory_order_acquire);
+    if (writeback_ptr) {
+      // read_ptr_writeback_ptr_ comes from MmGetPhysicalAddress (see
+      // VdEnableRingBufferRPtrWriteBack), so it's a physical, not virtual,
+      // guest address -- mirrors CommandProcessor::WriteRegister's own use
+      // of TranslatePhysical for the same field.
+      memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(writeback_ptr), value);
+    }
+  }
+}
+
+uint32_t KernelState::HeadlessReadRegister(uint32_t addr) {
+  uint32_t r = (addr & 0xFFFF) / 4;
+  switch (r) {
+    case 0x0F00:  // RB_EDRAM_TIMING
+      return 0x08100748;
+    case 0x0F01:  // RB_BC_CONTROL
+      return 0x0000200E;
+    case 0x194C: {  // R500_D1MODE_V_COUNTER
+      X_VIDEO_MODE video_mode;
+      rex::kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
+      return std::min(uint32_t(video_mode.display_height), uint32_t(0x0FFF));
+    }
+    case 0x1951:  // interrupt status
+      return 1;   // vblank
+    case 0x1961: {  // AVIVO_D1MODE_VIEWPORT_SIZE
+      X_VIDEO_MODE video_mode;
+      rex::kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
+      uint32_t viewport_width = std::min(uint32_t(video_mode.display_width), uint32_t(0x0FFF));
+      uint32_t viewport_height = std::min(uint32_t(video_mode.display_height), uint32_t(0x0FFF));
+      return (viewport_width << 16) | viewport_height;
+    }
+    default:
+      return 0;
+  }
+}
+
+void KernelState::StartHeadlessVblankThreadIfNeeded() {
+  // Only used when there's no GraphicsSystem (no gpu_plugin loaded) -- with
+  // one loaded, its own "GPU VSync" thread drives this same interrupt off
+  // real presentation timing instead.
+  if (headless_vblank_thread_ || emulator_->graphics_system()) {
+    return;
+  }
+
+  headless_vblank_thread_running_ = true;
+  headless_vblank_thread_ = object_ref<XHostThread>(
+      new XHostThread(this, 128 * 1024, 0, [this]() {
+        X_VIDEO_MODE video_mode;
+        rex::kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
+        double refresh_rate_hz = std::max(1.0, double(float(video_mode.refresh_rate)));
+        uint64_t guest_tick_frequency = chrono::Clock::guest_tick_frequency();
+        uint64_t vsync_interval_ticks =
+            std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
+        uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
+        while (headless_vblank_thread_running_) {
+          uint64_t current_time = chrono::Clock::QueryGuestTickCount();
+          while (current_time - last_frame_time >= vsync_interval_ticks) {
+            DispatchGraphicsInterruptCallback(0, 2);
+            last_frame_time += vsync_interval_ticks;
+          }
+          rex::thread::Sleep(std::chrono::milliseconds(1));
+        }
+        return 0;
+      }));
+  headless_vblank_thread_->set_name("Headless VBlank");
+  headless_vblank_thread_->Create();
 }
 
 bool KernelState::Save(stream::ByteStream* stream) {

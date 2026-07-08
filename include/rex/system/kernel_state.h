@@ -228,6 +228,26 @@ class KernelState {
   DPCImpersonationScope BeginDPCImpersonation();
   void EndDPCImpersonation(const DPCImpersonationScope& scope);
 
+  // Registers the guest's display interrupt callback (normally set via
+  // VdSetGraphicsInterruptCallback) and, if no GraphicsSystem is loaded
+  // (headless / no gpu_plugin), spins up a host timer thread that dispatches
+  // it at the configured guest refresh rate. This is what keeps the guest's
+  // own frame-driven logic -- audio submission, input polling, timers --
+  // progressing when there's no GPU emulation to generate real vblanks.
+  void SetGraphicsInterruptCallback(uint32_t callback, uint32_t user_data);
+  void DispatchGraphicsInterruptCallback(uint32_t source, uint32_t cpu);
+
+  // Headless ring-buffer stand-in: with no GraphicsSystem, nothing ever
+  // consumes submitted GPU commands, so guest code that waits for the ring
+  // buffer's read pointer (mirrored via VdEnableRingBufferRPtrWriteBack) to
+  // catch up to what it just submitted (written via the CP_RB_WPTR MMIO
+  // register) spins forever. This makes the GPU look infinitely fast: it
+  // installs an MMIO handler over the GPU register range and mirrors every
+  // CP_RB_WPTR write straight back into the read-pointer write-back address,
+  // so the guest always sees itself as caught up.
+  void EnableHeadlessRingBufferWriteBack(uint32_t ptr, uint32_t block_size_log2);
+  void InstallHeadlessGpuMmioIfNeeded();
+
   uint32_t AllocateTLS(PPCContext* context);
   void FreeTLS(PPCContext* context, uint32_t slot);
 
@@ -396,6 +416,21 @@ class KernelState {
   std::atomic<bool> dispatch_thread_running_;
   std::atomic<bool> terminating_title_{false};
   object_ref<XHostThread> dispatch_thread_;
+
+  void StartHeadlessVblankThreadIfNeeded();
+  std::atomic<uint32_t> graphics_interrupt_callback_{0};
+  uint32_t graphics_interrupt_callback_data_ = 0;
+  std::atomic<bool> headless_vblank_thread_running_{false};
+  object_ref<XHostThread> headless_vblank_thread_;
+
+  static void HeadlessWriteRegisterThunk(void* ppc_context, KernelState* kernel_state,
+                                         uint32_t addr, uint32_t value);
+  static uint32_t HeadlessReadRegisterThunk(void* ppc_context, KernelState* kernel_state,
+                                            uint32_t addr);
+  void HeadlessWriteRegister(uint32_t addr, uint32_t value);
+  uint32_t HeadlessReadRegister(uint32_t addr);
+  std::atomic<bool> headless_gpu_mmio_installed_{false};
+  std::atomic<uint32_t> ring_buffer_rptr_writeback_ptr_{0};
   // Must be guarded by the global critical region.
   util::NativeList dpc_list_;
   std::condition_variable_any dispatch_cond_;
