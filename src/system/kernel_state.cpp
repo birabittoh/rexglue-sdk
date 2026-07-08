@@ -1498,8 +1498,17 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
         bool decode_ib_content =
             is_indirect_buffer && ib_ptr && ib_len && (!already_seen_ib || native_gpu_command_callback_);
         if (decode_ib_content) {
-          bool should_log_ib = !already_seen_ib;
+          // Gated by the same kHeadlessPm4LogLimit budget as top-level
+          // packets, not just "first time this (ptr, len) is seen": the
+          // guest can cycle through many distinct command-buffer addresses
+          // (e.g. one per frame), which would otherwise defeat the dedup and
+          // re-log the full indirect-buffer content (often thousands of
+          // register writes) every single frame forever.
+          bool should_log_ib =
+              !already_seen_ib &&
+              headless_pm4_logged_packets.load(std::memory_order_relaxed) < kHeadlessPm4LogLimit;
           if (should_log_ib) {
+            headless_pm4_logged_packets.fetch_add(1, std::memory_order_relaxed);
             REXGPU_INFO("  -> decoding indirect buffer @ {:08X} ({} dwords)", ib_ptr, ib_len);
           }
           const uint8_t* ib_buf =
@@ -1527,7 +1536,14 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
             if (native_gpu_command_callback_) {
               native_gpu_command_callback_(ib_info, ib_buf + ib_offset * 4);
             }
-            if (!should_log_ib) {
+            // Re-checked every iteration (not just once before the loop):
+            // a single indirect buffer can itself contain hundreds of
+            // register-write packets, which must also draw from the shared
+            // budget so a handful of "first-seen" addresses can't each burn
+            // through it independently of kHeadlessPm4LogLimit.
+            if (!should_log_ib ||
+                headless_pm4_logged_packets.fetch_add(1, std::memory_order_relaxed) >=
+                    kHeadlessPm4LogLimit) {
               ib_offset += ib_info.count;
               continue;
             }
