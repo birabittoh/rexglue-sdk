@@ -1302,6 +1302,10 @@ void KernelState::SetHeadlessRingBufferBase(uint32_t ptr, uint32_t size_log2) {
   headless_ring_buffer_size_log2_.store(size_log2, std::memory_order_release);
 }
 
+void KernelState::SetNativeGpuCommandCallback(NativeGpuCommandCallback callback) {
+  native_gpu_command_callback_ = std::move(callback);
+}
+
 void KernelState::EnableHeadlessRingBufferWriteBack(uint32_t ptr, uint32_t block_size_log2) {
   ring_buffer_rptr_writeback_ptr_.store(ptr, std::memory_order_release);
   InstallHeadlessGpuMmioIfNeeded();
@@ -1346,19 +1350,24 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
       // of TranslatePhysical for the same field.
       memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(writeback_ptr), value);
     }
-    // TEMP (headless-boot investigation): decode newly-submitted PM4 packets
-    // so we can see exactly what the intro sequence issues (opcodes,
-    // registers, draws/swaps) rather than a raw hex dump.
+    // Decode newly-submitted PM4 packets: forwarded to the native command
+    // processor callback if one is registered, and/or logged for debugging
+    // (see kHeadlessPm4LogLimit below) so we can see exactly what the intro
+    // sequence issues (opcodes, registers, draws/swaps) rather than a raw hex
+    // dump.
     uint32_t base = headless_ring_buffer_base_.load(std::memory_order_acquire);
-    // Cap total decoded/logged packets: the guest resubmits a tiny,
-    // unchanging indirect-buffer jump in a tight spin while headless (no GPU
-    // ever drains the ring, so nothing gates resubmission), which can emit
-    // many thousands of identical log lines per millisecond and overwhelm
-    // logging I/O. This is throwaway capture instrumentation, so just stop
-    // once we've clearly captured more than enough of the intro sequence.
+    // Cap total *logged* packets: the guest resubmits a tiny, unchanging
+    // indirect-buffer jump in a tight spin while headless (no GPU ever drains
+    // the ring, so nothing gates resubmission), which can emit many thousands
+    // of identical log lines per millisecond and overwhelm logging I/O. This
+    // only stops the debug log, below -- decoding (and forwarding to the
+    // native command processor callback, if any) continues unconditionally,
+    // since a real consumer needs every submission for as long as the game
+    // runs, not just enough to eyeball the intro sequence.
     static std::atomic<uint32_t> headless_pm4_logged_packets{0};
     static constexpr uint32_t kHeadlessPm4LogLimit = 20000;
-    if (base && headless_pm4_logged_packets.load(std::memory_order_relaxed) < kHeadlessPm4LogLimit) {
+    if (base && (native_gpu_command_callback_ ||
+                 headless_pm4_logged_packets.load(std::memory_order_relaxed) < kHeadlessPm4LogLimit)) {
       uint32_t size_log2 = headless_ring_buffer_size_log2_.load(std::memory_order_acquire);
       uint32_t size_dwords = 1u << size_log2;
       // Decode from the persistent decode cursor, NOT from the wptr seen on
@@ -1414,9 +1423,12 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
         if (offset_dwords + packet_dwords > available) {
           break;
         }
-        if (headless_pm4_logged_packets.fetch_add(1, std::memory_order_relaxed) >=
-            kHeadlessPm4LogLimit) {
-          break;
+        // Only gates the debug REXGPU_INFO calls below, not decode or
+        // callback dispatch (see comment on kHeadlessPm4LogLimit above).
+        bool should_log = headless_pm4_logged_packets.load(std::memory_order_relaxed) <
+                          kHeadlessPm4LogLimit;
+        if (should_log) {
+          headless_pm4_logged_packets.fetch_add(1, std::memory_order_relaxed);
         }
 
         const char* category =
@@ -1449,7 +1461,16 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
           already_seen_ib = !logged_indirect_buffers.insert({ib_ptr, ib_len}).second;
         }
 
-        if (!is_indirect_buffer || !already_seen_ib) {
+        // Forward every top-level packet to the native command processor, if
+        // one is registered -- unconditionally, unlike the debug logging
+        // below (no total-packet cap, no indirect-buffer dedup): a real
+        // consumer needs every submission, not just enough to eyeball what
+        // the guest is doing.
+        if (native_gpu_command_callback_) {
+          native_gpu_command_callback_(info, buf + offset_dwords * 4);
+        }
+
+        if (should_log && (!is_indirect_buffer || !already_seen_ib)) {
           REXGPU_INFO("headless pm4: [{}] {} '{}' count={} predicated={}",
                       decode_pos + offset_dwords, category,
                       info.type_info ? info.type_info->name : "???", info.count,
@@ -1468,25 +1489,47 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
           }
         }
 
-        if (is_indirect_buffer && !already_seen_ib && ib_ptr && ib_len) {
-          REXGPU_INFO("  -> decoding indirect buffer @ {:08X} ({} dwords)", ib_ptr, ib_len);
+        // Decode indirect-buffer content whenever a native command processor
+        // is registered, even if this (pointer, length) pair was already
+        // logged once before: the guest reuses the same physical command
+        // buffer address for each new frame's content, so "already seen" is
+        // only meaningful for the debug log's noise reduction, never for
+        // correctness of an actual consumer.
+        bool decode_ib_content =
+            is_indirect_buffer && ib_ptr && ib_len && (!already_seen_ib || native_gpu_command_callback_);
+        if (decode_ib_content) {
+          bool should_log_ib = !already_seen_ib;
+          if (should_log_ib) {
+            REXGPU_INFO("  -> decoding indirect buffer @ {:08X} ({} dwords)", ib_ptr, ib_len);
+          }
           const uint8_t* ib_buf =
               reinterpret_cast<const uint8_t*>(memory_->TranslatePhysical(ib_ptr));
           uint32_t ib_offset = 0;
-          // Defensive cap: this is throwaway capture instrumentation reading
-          // guest-controlled data, so a misparsed header (e.g. a stale/
-          // uninitialized buffer) must not be able to spin the log forever.
+          // Defensive cap: this walks guest-controlled data, so a misparsed
+          // header (e.g. a stale/uninitialized buffer) must not be able to
+          // spin forever.
           constexpr uint32_t kMaxIbPacketsLogged = 512;
           uint32_t ib_packets_logged = 0;
           while (ib_offset < ib_len && ib_packets_logged++ < kMaxIbPacketsLogged) {
             graphics::PacketInfo ib_info;
             if (!graphics::PacketDisassembler::DisasmPacket(ib_buf + ib_offset * 4, &ib_info)) {
-              REXGPU_INFO("  ib: [{}] <unrecognized packet, aborting decode>", ib_offset);
+              if (should_log_ib) {
+                REXGPU_INFO("  ib: [{}] <unrecognized packet, aborting decode>", ib_offset);
+              }
               break;
             }
             if (ib_info.count == 0) {
-              REXGPU_INFO("  ib: [{}] <zero-length packet, aborting decode>", ib_offset);
+              if (should_log_ib) {
+                REXGPU_INFO("  ib: [{}] <zero-length packet, aborting decode>", ib_offset);
+              }
               break;
+            }
+            if (native_gpu_command_callback_) {
+              native_gpu_command_callback_(ib_info, ib_buf + ib_offset * 4);
+            }
+            if (!should_log_ib) {
+              ib_offset += ib_info.count;
+              continue;
             }
             const char* ib_category =
                 ib_info.type_info == nullptr

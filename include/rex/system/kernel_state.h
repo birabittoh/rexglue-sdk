@@ -45,6 +45,10 @@
 #include <rex/thread/mutex.h>
 #include <rex/types.h>
 
+namespace rex::graphics {
+struct PacketInfo;
+}  // namespace rex::graphics
+
 //=============================================================================
 // Kernel Import Trace Helpers
 //=============================================================================
@@ -251,6 +255,25 @@ class KernelState {
   // base/size so HeadlessWriteRegister can dump newly-submitted PM4 packets.
   void SetHeadlessRingBufferBase(uint32_t ptr, uint32_t size_log2);
 
+  // Native (non-xenos) command processor hook: when set, every fully-decoded
+  // PM4 packet submitted through the headless ring buffer -- including the
+  // contents of PM4_INDIRECT_BUFFER targets, which is where the actual
+  // per-frame draw stream lives (see docs/native-renderer-headless-boot.md,
+  // "Phase 1 revisited") -- is handed to this callback from
+  // HeadlessWriteRegister, in addition to (not instead of) the debug-log
+  // decode already there. Unlike that debug path, this is not deduplicated
+  // by indirect-buffer pointer/length and not subject to a total packet cap:
+  // the guest reuses the same physical addresses for a new frame's command
+  // buffer each frame, so skipping "already seen" pointers would silently
+  // drop real per-frame content. `packet_base` points into guest-mapped
+  // memory (still big-endian, as PacketDisassembler expects) and is only
+  // valid for the duration of the call. Must be set (once, from
+  // OnPreLaunchModule or earlier) before the guest thread starts submitting
+  // GPU commands -- not synchronized against concurrent Set/dispatch.
+  using NativeGpuCommandCallback =
+      std::function<void(const graphics::PacketInfo& info, const uint8_t* packet_base)>;
+  void SetNativeGpuCommandCallback(NativeGpuCommandCallback callback);
+
   uint32_t AllocateTLS(PPCContext* context);
   void FreeTLS(PPCContext* context, uint32_t slot);
 
@@ -441,6 +464,9 @@ class KernelState {
   // writes, so this must persist across calls rather than resetting to the
   // most recent wptr each time (which would misalign mid-packet).
   std::atomic<uint32_t> headless_ring_buffer_decode_pos_{0};
+  // Set once (before the guest thread starts submitting) via
+  // SetNativeGpuCommandCallback; see that method's doc comment.
+  NativeGpuCommandCallback native_gpu_command_callback_;
   // Must be guarded by the global critical region.
   util::NativeList dpc_list_;
   std::condition_variable_any dispatch_cond_;
