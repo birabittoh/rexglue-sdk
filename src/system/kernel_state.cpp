@@ -12,7 +12,9 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <set>
 #include <string>
+#include <utility>
 
 #include <fmt/format.h>
 #include <rex/assert.h>
@@ -1425,20 +1427,91 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
                        : (info.type_info->category == graphics::PacketCategory::kSwap
                               ? "swap"
                               : "generic"));
-        REXGPU_INFO("headless pm4: [{}] {} '{}' count={} predicated={}",
-                    decode_pos + offset_dwords, category,
-                    info.type_info ? info.type_info->name : "???", info.count,
-                    info.predicated);
-        for (const auto& action : info.actions) {
-          if (action.type == graphics::PacketAction::Type::kRegisterWrite) {
-            const auto* reg_info =
-                graphics::RegisterFile::GetRegisterInfo(action.register_write.index);
-            REXGPU_INFO("  reg {:04X} {} = {:08X}", action.register_write.index,
-                        reg_info ? reg_info->name : "???", action.register_write.value);
-          } else if (action.type == graphics::PacketAction::Type::kSetBinMask) {
-            REXGPU_INFO("  set_bin_mask = {:016X}", action.set_bin_mask.value);
-          } else if (action.type == graphics::PacketAction::Type::kSetBinSelect) {
-            REXGPU_INFO("  set_bin_select = {:016X}", action.set_bin_select.value);
+        bool is_indirect_buffer =
+            info.type_info != nullptr &&
+            std::strcmp(info.type_info->name, "PM4_INDIRECT_BUFFER") == 0;
+        // The guest resubmits the same handful of indirect-buffer jumps in a
+        // tight spin (nothing ever drains the ring headlessly), which would
+        // otherwise burn the whole kHeadlessPm4LogLimit budget on identical
+        // "PM4_INDIRECT_BUFFER" lines and never reach the actual command
+        // content those buffers point to. Only log+decode each distinct
+        // target once.
+        static std::set<std::pair<uint32_t, uint32_t>> logged_indirect_buffers;
+        uint32_t ib_ptr = 0, ib_len = 0;
+        bool already_seen_ib = false;
+        if (is_indirect_buffer) {
+          // Raw dword is a GPU-space pointer (see CommandProcessor::
+          // ExecutePacketType3_INDIRECT_BUFFER / xenos::CpuToGpu) -- mask to
+          // the 29-bit physical range before treating it as a CPU address,
+          // same as the real command processor does.
+          ib_ptr = memory::load_and_swap<uint32_t>(buf + (offset_dwords + 1) * 4) & 0x1FFFFFFF;
+          ib_len = memory::load_and_swap<uint32_t>(buf + (offset_dwords + 2) * 4) & 0xFFFFF;
+          already_seen_ib = !logged_indirect_buffers.insert({ib_ptr, ib_len}).second;
+        }
+
+        if (!is_indirect_buffer || !already_seen_ib) {
+          REXGPU_INFO("headless pm4: [{}] {} '{}' count={} predicated={}",
+                      decode_pos + offset_dwords, category,
+                      info.type_info ? info.type_info->name : "???", info.count,
+                      info.predicated);
+          for (const auto& action : info.actions) {
+            if (action.type == graphics::PacketAction::Type::kRegisterWrite) {
+              const auto* reg_info =
+                  graphics::RegisterFile::GetRegisterInfo(action.register_write.index);
+              REXGPU_INFO("  reg {:04X} {} = {:08X}", action.register_write.index,
+                          reg_info ? reg_info->name : "???", action.register_write.value);
+            } else if (action.type == graphics::PacketAction::Type::kSetBinMask) {
+              REXGPU_INFO("  set_bin_mask = {:016X}", action.set_bin_mask.value);
+            } else if (action.type == graphics::PacketAction::Type::kSetBinSelect) {
+              REXGPU_INFO("  set_bin_select = {:016X}", action.set_bin_select.value);
+            }
+          }
+        }
+
+        if (is_indirect_buffer && !already_seen_ib && ib_ptr && ib_len) {
+          REXGPU_INFO("  -> decoding indirect buffer @ {:08X} ({} dwords)", ib_ptr, ib_len);
+          const uint8_t* ib_buf =
+              reinterpret_cast<const uint8_t*>(memory_->TranslatePhysical(ib_ptr));
+          uint32_t ib_offset = 0;
+          // Defensive cap: this is throwaway capture instrumentation reading
+          // guest-controlled data, so a misparsed header (e.g. a stale/
+          // uninitialized buffer) must not be able to spin the log forever.
+          constexpr uint32_t kMaxIbPacketsLogged = 512;
+          uint32_t ib_packets_logged = 0;
+          while (ib_offset < ib_len && ib_packets_logged++ < kMaxIbPacketsLogged) {
+            graphics::PacketInfo ib_info;
+            if (!graphics::PacketDisassembler::DisasmPacket(ib_buf + ib_offset * 4, &ib_info)) {
+              REXGPU_INFO("  ib: [{}] <unrecognized packet, aborting decode>", ib_offset);
+              break;
+            }
+            if (ib_info.count == 0) {
+              REXGPU_INFO("  ib: [{}] <zero-length packet, aborting decode>", ib_offset);
+              break;
+            }
+            const char* ib_category =
+                ib_info.type_info == nullptr
+                    ? "?"
+                    : (ib_info.type_info->category == graphics::PacketCategory::kDraw
+                           ? "draw"
+                           : (ib_info.type_info->category == graphics::PacketCategory::kSwap
+                                  ? "swap"
+                                  : "generic"));
+            REXGPU_INFO("  ib: [{}] {} '{}' count={} predicated={}", ib_offset, ib_category,
+                        ib_info.type_info ? ib_info.type_info->name : "???", ib_info.count,
+                        ib_info.predicated);
+            for (const auto& action : ib_info.actions) {
+              if (action.type == graphics::PacketAction::Type::kRegisterWrite) {
+                const auto* reg_info =
+                    graphics::RegisterFile::GetRegisterInfo(action.register_write.index);
+                REXGPU_INFO("    reg {:04X} {} = {:08X}", action.register_write.index,
+                            reg_info ? reg_info->name : "???", action.register_write.value);
+              } else if (action.type == graphics::PacketAction::Type::kSetBinMask) {
+                REXGPU_INFO("    set_bin_mask = {:016X}", action.set_bin_mask.value);
+              } else if (action.type == graphics::PacketAction::Type::kSetBinSelect) {
+                REXGPU_INFO("    set_bin_select = {:016X}", action.set_bin_select.value);
+              }
+            }
+            ib_offset += ib_info.count;
           }
         }
 
