@@ -24,6 +24,8 @@
 #include <rex/thread/atomic.h>
 #include <rex/string.h>
 #include <rex/chrono/clock.h>
+#include <rex/graphics/packet_disassembler.h>
+#include <rex/graphics/register_file.h>
 #include <rex/kernel/xboxkrnl/threading.h>
 #include <rex/kernel/xboxkrnl/video.h>
 #include <rex/memory/utils.h>
@@ -1293,6 +1295,11 @@ void KernelState::DispatchGraphicsInterruptCallback(uint32_t source, uint32_t cp
                                          rex::countof(args));
 }
 
+void KernelState::SetHeadlessRingBufferBase(uint32_t ptr, uint32_t size_log2) {
+  headless_ring_buffer_base_.store(ptr, std::memory_order_release);
+  headless_ring_buffer_size_log2_.store(size_log2, std::memory_order_release);
+}
+
 void KernelState::EnableHeadlessRingBufferWriteBack(uint32_t ptr, uint32_t block_size_log2) {
   ring_buffer_rptr_writeback_ptr_.store(ptr, std::memory_order_release);
   InstallHeadlessGpuMmioIfNeeded();
@@ -1336,6 +1343,110 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
       // guest address -- mirrors CommandProcessor::WriteRegister's own use
       // of TranslatePhysical for the same field.
       memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(writeback_ptr), value);
+    }
+    // TEMP (headless-boot investigation): decode newly-submitted PM4 packets
+    // so we can see exactly what the intro sequence issues (opcodes,
+    // registers, draws/swaps) rather than a raw hex dump.
+    uint32_t base = headless_ring_buffer_base_.load(std::memory_order_acquire);
+    // Cap total decoded/logged packets: the guest resubmits a tiny,
+    // unchanging indirect-buffer jump in a tight spin while headless (no GPU
+    // ever drains the ring, so nothing gates resubmission), which can emit
+    // many thousands of identical log lines per millisecond and overwhelm
+    // logging I/O. This is throwaway capture instrumentation, so just stop
+    // once we've clearly captured more than enough of the intro sequence.
+    static std::atomic<uint32_t> headless_pm4_logged_packets{0};
+    static constexpr uint32_t kHeadlessPm4LogLimit = 20000;
+    if (base && headless_pm4_logged_packets.load(std::memory_order_relaxed) < kHeadlessPm4LogLimit) {
+      uint32_t size_log2 = headless_ring_buffer_size_log2_.load(std::memory_order_acquire);
+      uint32_t size_dwords = 1u << size_log2;
+      // Decode from the persistent decode cursor, NOT from the wptr seen on
+      // the previous call: packets routinely span multiple CP_RB_WPTR writes
+      // (the guest advances wptr in small increments as it fills the ring),
+      // so restarting the packet walk at each call's "last wptr" would
+      // reinterpret the middle of a packet as a fresh header. Only fully
+      // available packets get consumed; any trailing partial packet is left
+      // for the next call once more of the ring has been submitted.
+      uint32_t decode_pos = headless_ring_buffer_decode_pos_.load(std::memory_order_acquire);
+      uint32_t available = (value - decode_pos) & (size_dwords - 1);
+
+      // Copy the *entire* ring (wrapped, starting at decode_pos) into a flat,
+      // unswapped (still big-endian, as in guest memory) local buffer -- not
+      // just the `available` span. PacketDisassembler::DisasmPacket reads a
+      // type-3 packet's whole body speculatively based on its header's count
+      // field before we get a chance to check whether that many dwords were
+      // actually newly submitted; if we only copied `available` dwords, a
+      // packet whose header lands right at the end of that range would read
+      // out of bounds of this local buffer. The full ring is always valid,
+      // already-mapped guest physical memory (real if possibly-stale
+      // content for the not-yet-`available` tail), so this is a safe read
+      // regardless -- `available` is still what gates what we treat as
+      // *complete* and log below.
+      // Pad past one full lap by the largest possible packet body (14-bit
+      // count field => up to 16384 body dwords + 1 header) so that even a
+      // packet whose header sits right at the end of the ring -- or a
+      // corrupt header claiming a maximal count -- still resolves to
+      // in-bounds reads of this vector (the padding wraps back onto real
+      // ring content, not fabricated memory).
+      constexpr uint32_t kMaxPacketDwords = 1 + (0x3FFF + 1);
+      std::vector<uint32_t> raw(size_dwords + kMaxPacketDwords);
+      for (uint32_t i = 0; i < raw.size(); ++i) {
+        uint32_t ring_index = (decode_pos + i) & (size_dwords - 1);
+        std::memcpy(&raw[i], memory_->TranslatePhysical(base + ring_index * 4), sizeof(uint32_t));
+      }
+
+      const uint8_t* buf = reinterpret_cast<const uint8_t*>(raw.data());
+      uint32_t offset_dwords = 0;
+      while (offset_dwords < available) {
+        graphics::PacketInfo info;
+        if (!graphics::PacketDisassembler::DisasmPacket(
+                buf + offset_dwords * 4, &info)) {
+          REXGPU_INFO("headless pm4: [{}] <unrecognized packet, aborting decode>",
+                      decode_pos + offset_dwords);
+          break;
+        }
+        // info.count already includes the header dword (see
+        // PacketDisassembler::DisasmPacketType0/3: out_info->count = 1 +
+        // count); bail out rather than read past what's available so far --
+        // the rest of this packet lands on a later CP_RB_WPTR write.
+        uint32_t packet_dwords = info.count;
+        if (offset_dwords + packet_dwords > available) {
+          break;
+        }
+        if (headless_pm4_logged_packets.fetch_add(1, std::memory_order_relaxed) >=
+            kHeadlessPm4LogLimit) {
+          break;
+        }
+
+        const char* category =
+            info.type_info == nullptr
+                ? "?"
+                : (info.type_info->category == graphics::PacketCategory::kDraw
+                       ? "draw"
+                       : (info.type_info->category == graphics::PacketCategory::kSwap
+                              ? "swap"
+                              : "generic"));
+        REXGPU_INFO("headless pm4: [{}] {} '{}' count={} predicated={}",
+                    decode_pos + offset_dwords, category,
+                    info.type_info ? info.type_info->name : "???", info.count,
+                    info.predicated);
+        for (const auto& action : info.actions) {
+          if (action.type == graphics::PacketAction::Type::kRegisterWrite) {
+            const auto* reg_info =
+                graphics::RegisterFile::GetRegisterInfo(action.register_write.index);
+            REXGPU_INFO("  reg {:04X} {} = {:08X}", action.register_write.index,
+                        reg_info ? reg_info->name : "???", action.register_write.value);
+          } else if (action.type == graphics::PacketAction::Type::kSetBinMask) {
+            REXGPU_INFO("  set_bin_mask = {:016X}", action.set_bin_mask.value);
+          } else if (action.type == graphics::PacketAction::Type::kSetBinSelect) {
+            REXGPU_INFO("  set_bin_select = {:016X}", action.set_bin_select.value);
+          }
+        }
+
+        offset_dwords += packet_dwords;
+      }
+
+      headless_ring_buffer_decode_pos_.store((decode_pos + offset_dwords) & (size_dwords - 1),
+                                             std::memory_order_release);
     }
   }
 }

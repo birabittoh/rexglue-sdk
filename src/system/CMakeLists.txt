@@ -1,4 +1,14 @@
 set(REXSYSTEM_SOURCES
+    # Small, self-contained PM4/register format helpers reused by the
+    # headless ring-buffer decode instrumentation in kernel_state.cpp.
+    # NOTE: the rest of the Xenos GPU format layer lives in the
+    # rexgpu-xenos plugin, which is runtime-loaded and never linked here --
+    # only these two translation units are safe to duplicate into the
+    # always-linked runtime because they have no dependency on plugin-only
+    # code (command_processor, shader translation, etc).
+    ../graphics/register_file.cpp
+    ../graphics/packet_disassembler.cpp
+
     runtime.cpp
     embedded_metadata.cpp
     achievement_manager.cpp

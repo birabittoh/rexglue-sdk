@@ -337,6 +337,7 @@ void VdInitializeRingBuffer_entry(mapped_void ptr, i32 size_log2) {
     // MMIO range is wired up so CP_RB_WPTR writes go somewhere (see
     // EnableHeadlessRingBufferWriteBack).
     REX_KERNEL_STATE()->InstallHeadlessGpuMmioIfNeeded();
+    REX_KERNEL_STATE()->SetHeadlessRingBufferBase(ptr.guest_address(), size_log2);
     return;
   }
   graphics_system->InitializeRingBuffer(ptr.guest_address(), size_log2);

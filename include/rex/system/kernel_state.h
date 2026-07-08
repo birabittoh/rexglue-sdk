@@ -247,6 +247,9 @@ class KernelState {
   // so the guest always sees itself as caught up.
   void EnableHeadlessRingBufferWriteBack(uint32_t ptr, uint32_t block_size_log2);
   void InstallHeadlessGpuMmioIfNeeded();
+  // TEMP (headless-boot investigation): remember the ring buffer's physical
+  // base/size so HeadlessWriteRegister can dump newly-submitted PM4 packets.
+  void SetHeadlessRingBufferBase(uint32_t ptr, uint32_t size_log2);
 
   uint32_t AllocateTLS(PPCContext* context);
   void FreeTLS(PPCContext* context, uint32_t slot);
@@ -431,6 +434,13 @@ class KernelState {
   uint32_t HeadlessReadRegister(uint32_t addr);
   std::atomic<bool> headless_gpu_mmio_installed_{false};
   std::atomic<uint32_t> ring_buffer_rptr_writeback_ptr_{0};
+  std::atomic<uint32_t> headless_ring_buffer_base_{0};
+  std::atomic<uint32_t> headless_ring_buffer_size_log2_{0};
+  // TEMP (headless-boot investigation): separate cursor for the PM4 packet
+  // decode walk in HeadlessWriteRegister. Packets can span multiple CP_RB_WPTR
+  // writes, so this must persist across calls rather than resetting to the
+  // most recent wptr each time (which would misalign mid-packet).
+  std::atomic<uint32_t> headless_ring_buffer_decode_pos_{0};
   // Must be guarded by the global critical region.
   util::NativeList dpc_list_;
   std::condition_variable_any dispatch_cond_;
