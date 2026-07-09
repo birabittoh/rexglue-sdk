@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 #include <rex/dbg.h>
 #include <rex/input/flags.h>
@@ -27,6 +28,125 @@ REXCVAR_DEFINE_STRING(input_backend, "sdl", "Input", "Input backend: sdl, xinput
 
 REXCVAR_DEFINE_BOOL(guide_button, false, "Input", "Enable guide button pass-through");
 namespace rex::input {
+
+namespace {
+
+struct ButtonRemapEntry {
+  X_INPUT_GAMEPAD_BUTTON button;
+  const char* name;
+  std::function<const std::string&()> get_target;
+};
+
+}  // namespace
+
+#define REMAP_ALLOWED_VALUES \
+  {"dpad_up",                \
+   "dpad_down",              \
+   "dpad_left",              \
+   "dpad_right",             \
+   "start",                  \
+   "back",                   \
+   "left_thumb",             \
+   "right_thumb",            \
+   "left_shoulder",          \
+   "right_shoulder",         \
+   "guide",                  \
+   "a",                      \
+   "b",                      \
+   "x",                      \
+   "y"}
+
+REXCVAR_DEFINE_STRING(remap_dpad_up, "dpad_up", "Input/Remap/Controller", "D-pad up")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_dpad_down, "dpad_down", "Input/Remap/Controller", "D-pad down")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_dpad_left, "dpad_left", "Input/Remap/Controller", "D-pad left")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_dpad_right, "dpad_right", "Input/Remap/Controller", "D-pad right")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_start, "start", "Input/Remap/Controller", "Start button")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_back, "back", "Input/Remap/Controller", "Back button")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_left_thumb, "left_thumb", "Input/Remap/Controller", "Left stick press")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_right_thumb, "right_thumb", "Input/Remap/Controller",
+                      "Right stick press")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_left_shoulder, "left_shoulder", "Input/Remap/Controller",
+                      "Left shoulder")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_right_shoulder, "right_shoulder", "Input/Remap/Controller",
+                      "Right shoulder")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_guide, "guide", "Input/Remap/Controller", "Guide button")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_a, "a", "Input/Remap/Controller", "A button")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_b, "b", "Input/Remap/Controller", "B button")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_x, "x", "Input/Remap/Controller", "X button")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_y, "y", "Input/Remap/Controller", "Y button")
+    .allowed(REMAP_ALLOWED_VALUES);
+
+#undef REMAP_ALLOWED_VALUES
+
+namespace {
+
+const std::vector<ButtonRemapEntry>& ButtonRemapTable() {
+  static const std::vector<ButtonRemapEntry> table = {
+      {X_INPUT_GAMEPAD_DPAD_UP, "dpad_up",
+       []() -> const std::string& { return REXCVAR_GET(remap_dpad_up); }},
+      {X_INPUT_GAMEPAD_DPAD_DOWN, "dpad_down",
+       []() -> const std::string& { return REXCVAR_GET(remap_dpad_down); }},
+      {X_INPUT_GAMEPAD_DPAD_LEFT, "dpad_left",
+       []() -> const std::string& { return REXCVAR_GET(remap_dpad_left); }},
+      {X_INPUT_GAMEPAD_DPAD_RIGHT, "dpad_right",
+       []() -> const std::string& { return REXCVAR_GET(remap_dpad_right); }},
+      {X_INPUT_GAMEPAD_START, "start",
+       []() -> const std::string& { return REXCVAR_GET(remap_start); }},
+      {X_INPUT_GAMEPAD_BACK, "back",
+       []() -> const std::string& { return REXCVAR_GET(remap_back); }},
+      {X_INPUT_GAMEPAD_LEFT_THUMB, "left_thumb",
+       []() -> const std::string& { return REXCVAR_GET(remap_left_thumb); }},
+      {X_INPUT_GAMEPAD_RIGHT_THUMB, "right_thumb",
+       []() -> const std::string& { return REXCVAR_GET(remap_right_thumb); }},
+      {X_INPUT_GAMEPAD_LEFT_SHOULDER, "left_shoulder",
+       []() -> const std::string& { return REXCVAR_GET(remap_left_shoulder); }},
+      {X_INPUT_GAMEPAD_RIGHT_SHOULDER, "right_shoulder",
+       []() -> const std::string& { return REXCVAR_GET(remap_right_shoulder); }},
+      {X_INPUT_GAMEPAD_GUIDE, "guide",
+       []() -> const std::string& { return REXCVAR_GET(remap_guide); }},
+      {X_INPUT_GAMEPAD_A, "a", []() -> const std::string& { return REXCVAR_GET(remap_a); }},
+      {X_INPUT_GAMEPAD_B, "b", []() -> const std::string& { return REXCVAR_GET(remap_b); }},
+      {X_INPUT_GAMEPAD_X, "x", []() -> const std::string& { return REXCVAR_GET(remap_x); }},
+      {X_INPUT_GAMEPAD_Y, "y", []() -> const std::string& { return REXCVAR_GET(remap_y); }},
+  };
+  return table;
+}
+
+X_INPUT_GAMEPAD_BUTTON ButtonByName(const std::string& name) {
+  for (auto& entry : ButtonRemapTable()) {
+    if (name == entry.name) {
+      return entry.button;
+    }
+  }
+  return static_cast<X_INPUT_GAMEPAD_BUTTON>(0);
+}
+
+// Applies the physical controller button remap table to a raw button bitmask.
+uint16_t ApplyButtonRemap(uint16_t buttons) {
+  uint16_t remapped = 0;
+  for (auto& entry : ButtonRemapTable()) {
+    if (buttons & entry.button) {
+      remapped |= static_cast<uint16_t>(ButtonByName(entry.get_target()));
+    }
+  }
+  return remapped;
+}
+
+}  // namespace
 
 InputSystem::InputSystem(rex::ui::Window* window) : window_(window) {}
 
@@ -119,6 +239,8 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
   if (first_result) {
     return any_connected ? X_ERROR_EMPTY : X_ERROR_DEVICE_NOT_CONNECTED;
   }
+
+  merged.gamepad.buttons = ApplyButtonRemap(static_cast<uint16_t>(merged.gamepad.buttons));
 
   if (out_state) {
     *out_state = merged;
