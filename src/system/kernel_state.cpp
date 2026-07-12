@@ -1410,7 +1410,7 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
       while (offset_dwords < available) {
         graphics::PacketInfo info;
         if (!graphics::PacketDisassembler::DisasmPacket(
-                buf + offset_dwords * 4, &info)) {
+                buf + offset_dwords * 4, &info, memory_)) {
           REXGPU_INFO("headless pm4: [{}] <unrecognized packet, aborting decode>",
                       decode_pos + offset_dwords);
           break;
@@ -1521,7 +1521,8 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
           uint32_t ib_packets_logged = 0;
           while (ib_offset < ib_len && ib_packets_logged++ < kMaxIbPacketsLogged) {
             graphics::PacketInfo ib_info;
-            if (!graphics::PacketDisassembler::DisasmPacket(ib_buf + ib_offset * 4, &ib_info)) {
+            if (!graphics::PacketDisassembler::DisasmPacket(ib_buf + ib_offset * 4, &ib_info,
+                                                            memory_)) {
               if (should_log_ib) {
                 REXGPU_INFO("  ib: [{}] <unrecognized packet, aborting decode>", ib_offset);
               }

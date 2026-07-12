@@ -11,6 +11,7 @@
 
 #include <rex/graphics/packet_disassembler.h>
 #include <rex/graphics/xenos.h>
+#include <rex/system/xmemory.h>
 
 namespace rex::graphics {
 
@@ -94,7 +95,7 @@ bool PacketDisassembler::DisasmPacketType2(const uint8_t* base_ptr, uint32_t pac
 }
 
 bool PacketDisassembler::DisasmPacketType3(const uint8_t* base_ptr, uint32_t packet,
-                                           PacketInfo* out_info) {
+                                           PacketInfo* out_info, memory::Memory* guest_memory) {
   static const PacketTypeInfo type_3_unknown_info = {PacketCategory::kGeneric, "PM4_TYPE3_UNKNOWN"};
   out_info->type_info = &type_3_unknown_info;
 
@@ -330,9 +331,15 @@ bool PacketDisassembler::DisasmPacketType3(const uint8_t* base_ptr, uint32_t pac
           return true;
       }
       for (uint32_t n = 0; n < size_dwords; n++, index++) {
-        // Hrm, ?
-        // memory::load_and_swap<uint32_t>(membase_ + GpuToCpu(address + n * 4));
-        uint32_t data = 0xDEADBEEF;
+        uint32_t data;
+        if (guest_memory != nullptr) {
+          data = memory::load_and_swap<uint32_t>(
+              guest_memory->TranslatePhysical<const uint32_t*>(address + n * 4));
+        } else {
+          // No guest memory access available (e.g. trace-file disassembly) --
+          // emit a recognizable placeholder rather than silently zero.
+          data = 0xDEADBEEF;
+        }
         out_info->actions.emplace_back(PacketAction::RegisterWrite(index, data));
       }
       break;
@@ -435,7 +442,8 @@ bool PacketDisassembler::DisasmPacketType3(const uint8_t* base_ptr, uint32_t pac
   return result;
 }
 
-bool PacketDisassembler::DisasmPacket(const uint8_t* base_ptr, PacketInfo* out_info) {
+bool PacketDisassembler::DisasmPacket(const uint8_t* base_ptr, PacketInfo* out_info,
+                                      memory::Memory* guest_memory) {
   const uint32_t packet = memory::load_and_swap<uint32_t>(base_ptr);
   const uint32_t packet_type = packet >> 30;
   switch (packet_type) {
@@ -446,7 +454,7 @@ bool PacketDisassembler::DisasmPacket(const uint8_t* base_ptr, PacketInfo* out_i
     case 0x02:
       return DisasmPacketType2(base_ptr, packet, out_info);
     case 0x03:
-      return DisasmPacketType3(base_ptr, packet, out_info);
+      return DisasmPacketType3(base_ptr, packet, out_info, guest_memory);
     default:
       assert_unhandled_case(packet_type);
       return false;
