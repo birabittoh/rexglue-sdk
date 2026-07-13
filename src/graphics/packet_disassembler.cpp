@@ -434,7 +434,15 @@ bool PacketDisassembler::DisasmPacketType3(const uint8_t* base_ptr, uint32_t pac
       break;
     }
     default: {
-      result = false;
+      // Unknown type-3 opcode: the real command processor
+      // (CommandProcessor::ExecutePacketType3's default case) logs and
+      // *skips* it by its header count rather than halting the stream --
+      // aborting here instead silently drops everything after it in the
+      // buffer, including any trailing swap packet, which starves present
+      // pacing (see NocturneRecomp
+      // docs/native-renderer-pacing-investigation.md). out_info->count and
+      // the PM4_TYPE3_UNKNOWN type_info are already set above, so callers
+      // can advance past it just like the hardware would.
       break;
     }
   }
@@ -445,6 +453,29 @@ bool PacketDisassembler::DisasmPacketType3(const uint8_t* base_ptr, uint32_t pac
 bool PacketDisassembler::DisasmPacket(const uint8_t* base_ptr, PacketInfo* out_info,
                                       memory::Memory* guest_memory) {
   const uint32_t packet = memory::load_and_swap<uint32_t>(base_ptr);
+  // An all-zero dword is padding, not a packet: the real command processor
+  // (CommandProcessor::ExecutePacket) consumes it as a single dword and moves
+  // on. Parsing it as a type-0 header would mis-skip 2 dwords and desync the
+  // walk from what the hardware would do.
+  if (packet == 0) {
+    static const PacketTypeInfo zero_info = {PacketCategory::kGeneric, "PM4_ZERO_PAD"};
+    out_info->type_info = &zero_info;
+    out_info->count = 1;
+    return true;
+  }
+  // 0x0BADF00D is the guest D3D runtime's "disarmed" filler and shows up as a
+  // raw dword in real command streams; the real command processor
+  // (CommandProcessor::ExecutePacket) skips it as a single dword, same as
+  // zero padding. Parsing it as a type-0 header instead claims a ~3000-dword
+  // count, swallowing that much real stream and desyncing everything after
+  // it (observed: the misparsed tail's float data decoded as giant register
+  // sweeps that stomped SCRATCH_UMSK/ADDR).
+  if (packet == 0x0BADF00D) {
+    static const PacketTypeInfo badfood_info = {PacketCategory::kGeneric, "PM4_BADF00D_PAD"};
+    out_info->type_info = &badfood_info;
+    out_info->count = 1;
+    return true;
+  }
   const uint32_t packet_type = packet >> 30;
   switch (packet_type) {
     case 0x00:

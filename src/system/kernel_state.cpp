@@ -14,9 +14,11 @@
 #include <filesystem>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <utility>
 
 #include <fmt/format.h>
+#include <xxhash.h>
 #include <rex/assert.h>
 #include <rex/logging.h>
 #include <rex/math.h>
@@ -1334,8 +1336,127 @@ uint32_t KernelState::HeadlessReadRegisterThunk(void* ppc_context, KernelState* 
   return kernel_state->HeadlessReadRegister(addr);
 }
 
+bool KernelState::HeadlessStreamCpuInterruptSlotArmed() {
+  // Use the last *nonzero* SCRATCH_ADDR: the guest zeroes the register in
+  // some phases (loading/attract) while still arming the callback slot in
+  // the block directly with the CPU, so the register's current value must
+  // not gate this check.
+  uint32_t scratch_addr = headless_scratch_block_addr_.load(std::memory_order_acquire);
+  if (!scratch_addr) {
+    return false;
+  }
+  // Slot layout: scratch write-back block + 16 holds the completion-callback
+  // function pointer the guest ISR invokes on a source-1 interrupt; 0 means
+  // "nothing armed" (ISR silently ignores) and 0x0BADF00D is the explicit
+  // disarmed filler (ISR traps with "Unanticipated CPU_INTERRUPT").
+  uint32_t slot =
+      memory::load_and_swap<uint32_t>(memory_->TranslatePhysical((scratch_addr & 0x1FFFFFFF) + 16));
+  // Besides the explicit "empty" (0) and "disarmed" (0x0BADF00D) values,
+  // require the slot to plausibly be a guest function pointer (4-aligned, in
+  // the 0x8xxxxxxx virtual code range): a misdecoded packet stomping the
+  // scratch state can make this read return arbitrary bytes, and dispatching
+  // then makes the guest ISR call a junk pointer.
+  return slot != 0 && slot != 0x0BADF00D && (slot & 0x3) == 0 && (slot >> 28) == 0x8;
+}
+
 void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
   uint32_t r = (addr & 0xFFFF) / 4;
+
+  // Scratch register write-back, mirroring CommandProcessor::WriteRegister:
+  // writes to SCRATCH_REG0-7 (0x0578-0x057F) whose bit is set in
+  // SCRATCH_UMSK (0x01DC) are mirrored by the CP into guest memory at
+  // SCRATCH_ADDR (0x01DD) + reg*4. The guest D3D runtime depends on this for
+  // swap completion: it embeds type-0 writes of {completion fn, arg} to
+  // SCRATCH_REG4/5 in the command stream (see sub_82525390 in the SotN
+  // binary), the mirror lands them in the interrupt-callback block that its
+  // graphics ISR reads on a source-1 (swap) interrupt, and the ISR then
+  // calls that fn to count the swap as completed. Without the mirror the
+  // callback slot stays unarmed, swaps never complete, and the game's swap
+  // throttle wedges (the periodic fast-forward burst -- see NocturneRecomp
+  // docs/native-renderer-pacing-investigation.md).
+  auto apply_scratch_register_write = [this](uint32_t index, uint32_t reg_value) {
+    if (index == 0x01DC) {
+      headless_scratch_umsk_.store(reg_value, std::memory_order_release);
+    } else if (index == 0x01DD) {
+      headless_scratch_addr_.store(reg_value, std::memory_order_release);
+      if (reg_value) {
+        headless_scratch_block_addr_.store(reg_value, std::memory_order_release);
+      }
+    } else if (index >= 0x0578 && index <= 0x057F) {
+      uint32_t scratch_reg = index - 0x0578;
+      uint32_t umsk = headless_scratch_umsk_.load(std::memory_order_acquire);
+      if ((1u << scratch_reg) & umsk) {
+        uint32_t scratch_addr = headless_scratch_addr_.load(std::memory_order_acquire);
+        if (scratch_addr) {
+          memory::store_and_swap<uint32_t>(
+              memory_->TranslatePhysical((scratch_addr & 0x1FFFFFFF) + scratch_reg * 4), reg_value);
+        }
+      }
+    }
+  };
+  apply_scratch_register_write(r, value);
+
+  // Command-stream CPU interrupt (PM4_INTERRUPT, opcode 0x54), mirroring
+  // xenos CommandProcessor::ExecutePacketType3_INTERRUPT: source 1 is the
+  // swap-completion graphics interrupt. The guest D3D runtime's swap
+  // throttle compares swaps-submitted vs swaps-completed, and only its
+  // source-1 interrupt handler advances the completed count -- without this
+  // dispatch that count stays 0 forever, the throttle machinery wedges, and
+  // the game's frame loop free-runs (the periodic fast-forward burst).
+  //
+  // Armed-slot gate: on hardware the stream's preceding WAIT_REG_MEM
+  // handshake guarantees the CPU has armed its completion-callback slot
+  // (scratch write-back block + 16, written via SCRATCH_REG4) before the
+  // interrupt fires. This walk ignores waits, so enforce the same invariant
+  // directly: only dispatch while the slot holds a real callback pointer --
+  // the guest ISR traps ("Unanticipated CPU_INTERRUPT") if it sees the
+  // 0x0BADF00D disarmed filler, and silently ignores 0.
+  // When the slot is disarmed at decode time, the interrupt is *deferred*
+  // (queued for the headless vblank thread, which delivers it as soon as the
+  // guest arms the slot) rather than dropped: on hardware the CPU may arm
+  // the slot after submitting the stream but before the GPU reaches the
+  // interrupt packet -- our synchronous decode reaches it "too early", and
+  // dropping it would wedge the swap throttle again.
+  auto dispatch_stream_cpu_interrupt = [this](uint32_t cpu_mask) {
+    if (HeadlessStreamCpuInterruptSlotArmed()) {
+      for (uint32_t n = 0; n < 6; n++) {
+        if (cpu_mask & (1u << n)) {
+          DispatchGraphicsInterruptCallback(1, n);
+        }
+      }
+    } else {
+      headless_pending_cpu_interrupt_mask_.store(cpu_mask, std::memory_order_release);
+      // Cap the deferred backlog: hardware coalesces level-triggered
+      // interrupts, and batch-flushing thousands of stale ones when the slot
+      // finally re-arms would advance the guest's swaps-completed count far
+      // past reality in one step.
+      constexpr uint32_t kMaxPendingCpuInterrupts = 3;
+      uint32_t pending = headless_pending_cpu_interrupts_.load(std::memory_order_acquire);
+      while (pending < kMaxPendingCpuInterrupts &&
+             !headless_pending_cpu_interrupts_.compare_exchange_weak(
+                 pending, pending + 1, std::memory_order_release, std::memory_order_acquire)) {}
+    }
+  };
+
+  // Misparse detector for the packet walks below: a decoded packet whose
+  // register writes land outside the Xenos register file (0x5003 dwords)
+  // cannot be a real packet. It's non-PM4 data (float constants, vertex
+  // data, stale buffer contents) misinterpreted as a packet header -- e.g.
+  // a float like 0x3F7F0001 parses as PM4_TYPE0 with a ~16K-dword count,
+  // whose bogus register sweep crosses SCRATCH_UMSK/ADDR and stomps the
+  // swap-completion state (observed live; see NocturneRecomp
+  // docs/native-renderer-pacing-investigation.md). Everything decoded after
+  // such a packet is equally garbage, so callers abort their walk on it.
+  auto packet_actions_plausible = [](const graphics::PacketInfo& info) {
+    for (const auto& action : info.actions) {
+      if (action.type == graphics::PacketAction::Type::kRegisterWrite &&
+          action.register_write.index >= 0x5003) {
+        return false;
+      }
+    }
+    return true;
+  };
+
   if (r == 0x01C5) {  // CP_RB_WPTR
     // No real GPU is draining the ring buffer, so make it look infinitely
     // fast: immediately mirror the just-submitted write pointer back into
@@ -1347,7 +1468,10 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
       // read_ptr_writeback_ptr_ comes from MmGetPhysicalAddress (see
       // VdEnableRingBufferRPtrWriteBack), so it's a physical, not virtual,
       // guest address -- mirrors CommandProcessor::WriteRegister's own use
-      // of TranslatePhysical for the same field.
+      // of TranslatePhysical for the same field. Instant mirroring is
+      // truthful here: the headless native path consumes and forwards the
+      // ring's contents synchronously within this very call, so by the time
+      // the guest resumes, the "GPU" genuinely has caught up.
       memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(writeback_ptr), value);
     }
     // Decode newly-submitted PM4 packets: forwarded to the native command
@@ -1366,10 +1490,19 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
     // runs, not just enough to eyeball the intro sequence.
     static std::atomic<uint32_t> headless_pm4_logged_packets{0};
     static constexpr uint32_t kHeadlessPm4LogLimit = 20000;
-    if (base && (native_gpu_command_callback_ ||
-                 headless_pm4_logged_packets.load(std::memory_order_relaxed) < kHeadlessPm4LogLimit)) {
+    if (base &&
+        (native_gpu_command_callback_ ||
+         headless_pm4_logged_packets.load(std::memory_order_relaxed) < kHeadlessPm4LogLimit)) {
       uint32_t size_log2 = headless_ring_buffer_size_log2_.load(std::memory_order_acquire);
-      uint32_t size_dwords = 1u << size_log2;
+      // VdInitializeRingBuffer's size_log2 is log2 of the size in *bytes
+      // minus 3* -- the real ring is `1 << (size_log2 + 3)` bytes, i.e.
+      // `1 << (size_log2 + 1)` dwords (see xenia
+      // CommandProcessor::InitializeRingBuffer). Treating it as log2 of
+      // dwords halved the ring: every real lap, the wrap mask wrapped early
+      // and the walk re-read stale first-half content as fresh stream --
+      // stale jump headers, garbage indirect-buffer lengths, dropped swaps,
+      // and a guest fast-forward burst once per ring lap.
+      uint32_t size_dwords = 1u << (size_log2 + 1);
       // Decode from the persistent decode cursor, NOT from the wptr seen on
       // the previous call: packets routinely span multiple CP_RB_WPTR writes
       // (the guest advances wptr in small increments as it fills the ring),
@@ -1407,12 +1540,27 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
 
       const uint8_t* buf = reinterpret_cast<const uint8_t*>(raw.data());
       uint32_t offset_dwords = 0;
+      // Real per-consumer dedup for this call's available window only (NOT
+      // the persistent logged_indirect_buffers set below, which must stay
+      // forever-lived since a physical IB address legitimately gets reused
+      // for new content across real frames -- see its own comment). Scoped
+      // to just this window because a native_gpu_command_callback_ consumer
+      // (a real renderer) doesn't need the same indirect buffer decoded
+      // and forwarded dozens of times over just because the guest re-wrote
+      // the ring pointer to the same jump while spin-waiting with nothing
+      // draining it (see kNext comment on tight-spin resubmission) -- that
+      // was previously unconditional whenever a callback was registered and
+      // could balloon one CP_RB_WPTR write into tens of thousands of
+      // redundant re-decoded packets (observed: 954 IBs / 19511 register
+      // writes in a single call, ~100x a normal frame's ~10 IBs), stalling
+      // the consumer for seconds despite drawing nothing new.
+      std::set<std::pair<uint32_t, uint32_t>> decoded_ibs_this_call;
+      std::unordered_set<uint64_t> decoded_ib_content_hashes_this_call;
       while (offset_dwords < available) {
         graphics::PacketInfo info;
-        if (!graphics::PacketDisassembler::DisasmPacket(
-                buf + offset_dwords * 4, &info, memory_)) {
-          REXGPU_INFO("headless pm4: [{}] <unrecognized packet, aborting decode>",
-                      decode_pos + offset_dwords);
+        if (!graphics::PacketDisassembler::DisasmPacket(buf + offset_dwords * 4, &info, memory_)) {
+          REXGPU_DEBUG("headless pm4: [{}] <unrecognized packet, aborting decode>",
+                       decode_pos + offset_dwords);
           break;
         }
         // info.count already includes the header dword (see
@@ -1423,10 +1571,22 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
         if (offset_dwords + packet_dwords > available) {
           break;
         }
+        if (!packet_actions_plausible(info)) {
+          REXGPU_INFO(
+              "headless pm4: [{}] <implausible register-write packet (hdr={:08X}), dropping "
+              "rest of window>",
+              decode_pos + offset_dwords, memory::load_and_swap<uint32_t>(buf + offset_dwords * 4));
+          // Skip to the write pointer rather than leaving the cursor parked
+          // on the garbage: it would never decode into anything valid, and
+          // every subsequent CP_RB_WPTR write would re-hit it and decode
+          // nothing forever.
+          offset_dwords = available;
+          break;
+        }
         // Only gates the debug REXGPU_INFO calls below, not decode or
         // callback dispatch (see comment on kHeadlessPm4LogLimit above).
-        bool should_log = headless_pm4_logged_packets.load(std::memory_order_relaxed) <
-                          kHeadlessPm4LogLimit;
+        bool should_log =
+            headless_pm4_logged_packets.load(std::memory_order_relaxed) < kHeadlessPm4LogLimit;
         if (should_log) {
           headless_pm4_logged_packets.fetch_add(1, std::memory_order_relaxed);
         }
@@ -1436,12 +1596,10 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
                 ? "?"
                 : (info.type_info->category == graphics::PacketCategory::kDraw
                        ? "draw"
-                       : (info.type_info->category == graphics::PacketCategory::kSwap
-                              ? "swap"
-                              : "generic"));
-        bool is_indirect_buffer =
-            info.type_info != nullptr &&
-            std::strcmp(info.type_info->name, "PM4_INDIRECT_BUFFER") == 0;
+                       : (info.type_info->category == graphics::PacketCategory::kSwap ? "swap"
+                                                                                      : "generic"));
+        bool is_indirect_buffer = info.type_info != nullptr &&
+                                  std::strcmp(info.type_info->name, "PM4_INDIRECT_BUFFER") == 0;
         // The guest resubmits the same handful of indirect-buffer jumps in a
         // tight spin (nothing ever drains the ring headlessly), which would
         // otherwise burn the whole kHeadlessPm4LogLimit budget on identical
@@ -1466,21 +1624,29 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
         // below (no total-packet cap, no indirect-buffer dedup): a real
         // consumer needs every submission, not just enough to eyeball what
         // the guest is doing.
+        for (const auto& action : info.actions) {
+          if (action.type == graphics::PacketAction::Type::kRegisterWrite) {
+            apply_scratch_register_write(action.register_write.index, action.register_write.value);
+          }
+        }
+        if (info.type_info && std::strcmp(info.type_info->name, "PM4_INTERRUPT") == 0) {
+          dispatch_stream_cpu_interrupt(
+              memory::load_and_swap<uint32_t>(buf + (offset_dwords + 1) * 4));
+        }
         if (native_gpu_command_callback_) {
           native_gpu_command_callback_(info, buf + offset_dwords * 4);
         }
 
         if (should_log && (!is_indirect_buffer || !already_seen_ib)) {
-          REXGPU_INFO("headless pm4: [{}] {} '{}' count={} predicated={}",
-                      decode_pos + offset_dwords, category,
-                      info.type_info ? info.type_info->name : "???", info.count,
-                      info.predicated);
+          REXGPU_DEBUG("headless pm4: [{}] {} '{}' count={} predicated={}",
+                       decode_pos + offset_dwords, category,
+                       info.type_info ? info.type_info->name : "???", info.count, info.predicated);
           for (const auto& action : info.actions) {
             if (action.type == graphics::PacketAction::Type::kRegisterWrite) {
               const auto* reg_info =
                   graphics::RegisterFile::GetRegisterInfo(action.register_write.index);
-              REXGPU_INFO("  reg {:04X} {} = {:08X}", action.register_write.index,
-                          reg_info ? reg_info->name : "???", action.register_write.value);
+              REXGPU_DEBUG("  reg {:04X} {} = {:08X}", action.register_write.index,
+                           reg_info ? reg_info->name : "???", action.register_write.value);
             } else if (action.type == graphics::PacketAction::Type::kSetBinMask) {
               REXGPU_INFO("  set_bin_mask = {:016X}", action.set_bin_mask.value);
             } else if (action.type == graphics::PacketAction::Type::kSetBinSelect) {
@@ -1491,12 +1657,49 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
 
         // Decode indirect-buffer content whenever a native command processor
         // is registered, even if this (pointer, length) pair was already
-        // logged once before: the guest reuses the same physical command
-        // buffer address for each new frame's content, so "already seen" is
-        // only meaningful for the debug log's noise reduction, never for
-        // correctness of an actual consumer.
-        bool decode_ib_content =
-            is_indirect_buffer && ib_ptr && ib_len && (!already_seen_ib || native_gpu_command_callback_);
+        // logged once before (that persistent dedup is debug-log-only, see
+        // its own comment -- a real consumer does need every genuinely new
+        // frame's content, and the guest reuses the same physical address
+        // across real frames). But within *this* call's available window,
+        // the same (ptr,len) appearing again means the guest resubmitted the
+        // exact same jump without anything new being written in between (the
+        // tight-spin case, see decoded_ibs_this_call's comment above) --
+        // decoding and forwarding it again would just redraw the same frame
+        // redundantly, so dedup against decoded_ibs_this_call instead.
+        //
+        // (ptr,len) dedup alone turned out insufficient in practice: a spin
+        // burst observed in the wild resubmitted ~1000 indirect buffers with
+        // mostly *distinct* addresses (likely a small ring-allocated pool the
+        // guest cycles through while spinning) but near-identical content --
+        // so also hash the actual bytes and dedup on that too, catching
+        // "same frame, different address" resubmission that address-only
+        // dedup can't see.
+        bool decode_ib_content = is_indirect_buffer && ib_ptr && ib_len;
+        // Duplicate-content IBs are still *walked*, but only their swap
+        // packets are forwarded (see duplicate_ib_content below): each
+        // guest frame ends in a swap packet inside its command buffer, and
+        // dropping it silently starves the consumer's present pacing. That
+        // was the native renderer's periodic fast-forward burst: on a static
+        // screen consecutive frames' command buffers are byte-identical, so
+        // once the guest got far enough ahead that several frames landed in
+        // one CP_RB_WPTR decode window, this dedup dropped every frame after
+        // the first -- swaps included -- so the present-side frame pacing
+        // stopped engaging, the guest ran even faster, packing even more
+        // frames per window, until the screen content changed
+        // (docs/native-renderer-pacing-investigation.md in NocturneRecomp).
+        // Forwarding just the swap keeps that feedback loop closed while
+        // still not redrawing the duplicate content (the original spin-storm
+        // dedup this was added for involves resubmitted jumps with no swaps).
+        bool duplicate_ib_content = false;
+        if (decode_ib_content) {
+          duplicate_ib_content = !decoded_ibs_this_call.insert({ib_ptr, ib_len}).second;
+          if (!duplicate_ib_content) {
+            const uint8_t* ib_content_for_hash =
+                reinterpret_cast<const uint8_t*>(memory_->TranslatePhysical(ib_ptr));
+            uint64_t content_hash = XXH3_64bits(ib_content_for_hash, size_t(ib_len) * 4);
+            duplicate_ib_content = !decoded_ib_content_hashes_this_call.insert(content_hash).second;
+          }
+        }
         if (decode_ib_content) {
           // Gated by the same kHeadlessPm4LogLimit budget as top-level
           // packets, not just "first time this (ptr, len) is seen": the
@@ -1516,15 +1719,25 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
           uint32_t ib_offset = 0;
           // Defensive cap: this walks guest-controlled data, so a misparsed
           // header (e.g. a stale/uninitialized buffer) must not be able to
-          // spin forever.
-          constexpr uint32_t kMaxIbPacketsLogged = 512;
+          // spin forever. Must comfortably exceed a real frame's packet
+          // count (observed ~250-600, storms 10000+): this bounds *decode*,
+          // not just logging, and a too-small cap truncates the tail of the
+          // frame's command buffer -- which is exactly where the swap packet
+          // lives, silently starving the consumer's present pacing.
+          // Progress is guaranteed (every decoded packet advances >= 1
+          // dword), so this only guards against pathological loops; size it
+          // to never truncate a legitimate walk (ib_len is capped at 0xFFFFF
+          // dwords by the jump packet's length field).
+          constexpr uint32_t kMaxIbPackets = 0x100000;
           uint32_t ib_packets_logged = 0;
-          while (ib_offset < ib_len && ib_packets_logged++ < kMaxIbPacketsLogged) {
+          while (ib_offset < ib_len && ib_packets_logged++ < kMaxIbPackets) {
             graphics::PacketInfo ib_info;
             if (!graphics::PacketDisassembler::DisasmPacket(ib_buf + ib_offset * 4, &ib_info,
                                                             memory_)) {
               if (should_log_ib) {
-                REXGPU_INFO("  ib: [{}] <unrecognized packet, aborting decode>", ib_offset);
+                uint32_t head = memory::load_and_swap<uint32_t>(ib_buf + ib_offset * 4);
+                REXGPU_DEBUG("  ib: [{}] <unrecognized packet header {:08X}, aborting decode>",
+                             ib_offset, head);
               }
               break;
             }
@@ -1534,7 +1747,42 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
               }
               break;
             }
-            if (native_gpu_command_callback_) {
+            // A packet claiming to extend past the end of this indirect
+            // buffer means the walk is misaligned or hit trailing non-PM4
+            // data (e.g. an FFFFFFFF terminator whose bogus count field
+            // would otherwise skip 16K dwords into the middle of real
+            // content). Stop here: continuing would misparse everything
+            // after the wild skip -- observed stomping SCRATCH_UMSK/ADDR
+            // with garbage register writes and crashing the guest via a
+            // junk interrupt-callback pointer.
+            if (ib_offset + ib_info.count > ib_len) {
+              break;
+            }
+            // Same misparse detector as the top-level walk: an in-bounds
+            // "packet" sweeping registers past the register file is non-PM4
+            // data (float constants etc.) -- everything after it in this IB
+            // is garbage too, so stop here instead of letting the bogus
+            // register sweep stomp SCRATCH_UMSK/ADDR.
+            if (!packet_actions_plausible(ib_info)) {
+              break;
+            }
+            for (const auto& action : ib_info.actions) {
+              if (action.type == graphics::PacketAction::Type::kRegisterWrite) {
+                apply_scratch_register_write(action.register_write.index,
+                                             action.register_write.value);
+              }
+            }
+            if (ib_info.type_info && std::strcmp(ib_info.type_info->name, "PM4_INTERRUPT") == 0) {
+              dispatch_stream_cpu_interrupt(
+                  memory::load_and_swap<uint32_t>(ib_buf + (ib_offset + 1) * 4));
+            }
+            // Duplicate-content IBs still forward their swap packets (the
+            // consumer's present pacing needs every frame boundary), just
+            // not the redundant draw content.
+            if (native_gpu_command_callback_ &&
+                (!duplicate_ib_content ||
+                 (ib_info.type_info &&
+                  ib_info.type_info->category == graphics::PacketCategory::kSwap))) {
               native_gpu_command_callback_(ib_info, ib_buf + ib_offset * 4);
             }
             // Re-checked every iteration (not just once before the loop):
@@ -1542,9 +1790,8 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
             // register-write packets, which must also draw from the shared
             // budget so a handful of "first-seen" addresses can't each burn
             // through it independently of kHeadlessPm4LogLimit.
-            if (!should_log_ib ||
-                headless_pm4_logged_packets.fetch_add(1, std::memory_order_relaxed) >=
-                    kHeadlessPm4LogLimit) {
+            if (!should_log_ib || headless_pm4_logged_packets.fetch_add(
+                                      1, std::memory_order_relaxed) >= kHeadlessPm4LogLimit) {
               ib_offset += ib_info.count;
               continue;
             }
@@ -1556,15 +1803,15 @@ void KernelState::HeadlessWriteRegister(uint32_t addr, uint32_t value) {
                            : (ib_info.type_info->category == graphics::PacketCategory::kSwap
                                   ? "swap"
                                   : "generic"));
-            REXGPU_INFO("  ib: [{}] {} '{}' count={} predicated={}", ib_offset, ib_category,
-                        ib_info.type_info ? ib_info.type_info->name : "???", ib_info.count,
-                        ib_info.predicated);
+            REXGPU_DEBUG("  ib: [{}] {} '{}' count={} predicated={}", ib_offset, ib_category,
+                         ib_info.type_info ? ib_info.type_info->name : "???", ib_info.count,
+                         ib_info.predicated);
             for (const auto& action : ib_info.actions) {
               if (action.type == graphics::PacketAction::Type::kRegisterWrite) {
                 const auto* reg_info =
                     graphics::RegisterFile::GetRegisterInfo(action.register_write.index);
-                REXGPU_INFO("    reg {:04X} {} = {:08X}", action.register_write.index,
-                            reg_info ? reg_info->name : "???", action.register_write.value);
+                REXGPU_DEBUG("    reg {:04X} {} = {:08X}", action.register_write.index,
+                             reg_info ? reg_info->name : "???", action.register_write.value);
               } else if (action.type == graphics::PacketAction::Type::kSetBinMask) {
                 REXGPU_INFO("    set_bin_mask = {:016X}", action.set_bin_mask.value);
               } else if (action.type == graphics::PacketAction::Type::kSetBinSelect) {
@@ -1596,8 +1843,8 @@ uint32_t KernelState::HeadlessReadRegister(uint32_t addr) {
       rex::kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
       return std::min(uint32_t(video_mode.display_height), uint32_t(0x0FFF));
     }
-    case 0x1951:  // interrupt status
-      return 1;   // vblank
+    case 0x1951:    // interrupt status
+      return 1;     // vblank
     case 0x1961: {  // AVIVO_D1MODE_VIEWPORT_SIZE
       X_VIDEO_MODE video_mode;
       rex::kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
@@ -1619,25 +1866,48 @@ void KernelState::StartHeadlessVblankThreadIfNeeded() {
   }
 
   headless_vblank_thread_running_ = true;
-  headless_vblank_thread_ = object_ref<XHostThread>(
-      new XHostThread(this, 128 * 1024, 0, [this]() {
-        X_VIDEO_MODE video_mode;
-        rex::kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
-        double refresh_rate_hz = std::max(1.0, double(float(video_mode.refresh_rate)));
-        uint64_t guest_tick_frequency = chrono::Clock::guest_tick_frequency();
-        uint64_t vsync_interval_ticks =
-            std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
-        uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
-        while (headless_vblank_thread_running_) {
-          uint64_t current_time = chrono::Clock::QueryGuestTickCount();
-          while (current_time - last_frame_time >= vsync_interval_ticks) {
-            DispatchGraphicsInterruptCallback(0, 2);
-            last_frame_time += vsync_interval_ticks;
+  headless_vblank_thread_ = object_ref<XHostThread>(new XHostThread(this, 128 * 1024, 0, [this]() {
+    X_VIDEO_MODE video_mode;
+    rex::kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
+    double refresh_rate_hz = std::max(1.0, double(float(video_mode.refresh_rate)));
+    uint64_t guest_tick_frequency = chrono::Clock::guest_tick_frequency();
+    uint64_t vsync_interval_ticks =
+        std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
+    uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
+    while (headless_vblank_thread_running_) {
+      uint64_t current_time = chrono::Clock::QueryGuestTickCount();
+      // Deliver deferred command-stream CPU interrupts (source 1, swap
+      // completion) once the guest has armed its callback slot -- see
+      // dispatch_stream_cpu_interrupt in HeadlessWriteRegister.
+      while (headless_pending_cpu_interrupts_.load(std::memory_order_acquire) > 0 &&
+             HeadlessStreamCpuInterruptSlotArmed()) {
+        headless_pending_cpu_interrupts_.fetch_sub(1, std::memory_order_release);
+        uint32_t mask = headless_pending_cpu_interrupt_mask_.load(std::memory_order_acquire);
+        for (uint32_t n = 0; n < 6; n++) {
+          if (mask & (1u << n)) {
+            DispatchGraphicsInterruptCallback(1, n);
           }
-          rex::thread::Sleep(std::chrono::milliseconds(1));
         }
-        return 0;
-      }));
+      }
+      // Spiral-of-death cap: if this thread somehow falls many intervals
+      // behind real time, fire at most one vblank and resync rather than
+      // replaying the whole backlog in a tight burst (which the guest
+      // would simulate as one big "skip ahead").
+      constexpr uint64_t kMaxCatchUpTicks = 4;
+      uint64_t missed = (current_time - last_frame_time) / vsync_interval_ticks;
+      if (missed > kMaxCatchUpTicks) {
+        DispatchGraphicsInterruptCallback(0, 2);
+        last_frame_time = current_time;
+      } else {
+        while (current_time - last_frame_time >= vsync_interval_ticks) {
+          DispatchGraphicsInterruptCallback(0, 2);
+          last_frame_time += vsync_interval_ticks;
+        }
+      }
+      rex::thread::Sleep(std::chrono::milliseconds(1));
+    }
+    return 0;
+  }));
   headless_vblank_thread_->set_name("Headless VBlank");
   headless_vblank_thread_->Create();
 }

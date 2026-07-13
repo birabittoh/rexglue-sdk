@@ -448,6 +448,24 @@ class KernelState {
   uint32_t graphics_interrupt_callback_data_ = 0;
   std::atomic<bool> headless_vblank_thread_running_{false};
   object_ref<XHostThread> headless_vblank_thread_;
+  // Headless scratch-register write-back state (SCRATCH_UMSK / SCRATCH_ADDR,
+  // GPU regs 0x01DC / 0x01DD): writes to SCRATCH_REG0-7 are mirrored into
+  // guest memory at scratch_addr + reg*4 when unmasked, matching
+  // CommandProcessor::WriteRegister. The guest D3D runtime's swap-completion
+  // interrupt machinery depends on this mirror (see HeadlessWriteRegister).
+  std::atomic<uint32_t> headless_scratch_umsk_{0};
+  std::atomic<uint32_t> headless_scratch_addr_{0};
+  // Last nonzero SCRATCH_ADDR ever written. The guest legitimately zeroes
+  // the register in some phases while still arming the interrupt-callback
+  // slot inside the block directly with the CPU, so the armed-slot check
+  // must key off the block's location, not the register's current value.
+  std::atomic<uint32_t> headless_scratch_block_addr_{0};
+  // Deferred command-stream CPU interrupts (PM4_INTERRUPT, source 1 = swap
+  // completion): queued when decoded while the guest's interrupt-callback
+  // slot is disarmed, delivered by the headless vblank thread once armed.
+  bool HeadlessStreamCpuInterruptSlotArmed();
+  std::atomic<uint32_t> headless_pending_cpu_interrupts_{0};
+  std::atomic<uint32_t> headless_pending_cpu_interrupt_mask_{0};
 
   static void HeadlessWriteRegisterThunk(void* ppc_context, KernelState* kernel_state,
                                          uint32_t addr, uint32_t value);
