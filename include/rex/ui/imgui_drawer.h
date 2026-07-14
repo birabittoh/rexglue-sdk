@@ -123,6 +123,11 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
 
   double frame_time_tick_frequency_;
   uint64_t last_frame_time_ticks_;
+
+  // Mirrors the last ImGuiIO::WantTextInput value applied to window_ via
+  // SetTextInputActive, so it can be cleared if Draw() early-outs (e.g. the
+  // last dialog was just removed) without running another ImGui frame.
+  bool text_input_active_ = false;
 };
 
 }  // namespace ui
