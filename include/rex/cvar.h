@@ -160,6 +160,10 @@ struct FlagEntry {
   Constraints constraints;
   std::string default_value;
   bool is_debug_only = false;
+  // True once this cvar's value came from the config file, or was set
+  // explicitly by the user (e.g. via the settings overlay). Only cvars with
+  // this flag set are written back out by SerializeToTOML/SaveConfig
+  bool persist_to_config = false;
 };
 
 std::vector<FlagEntry>& GetRegistry();
@@ -176,7 +180,10 @@ std::optional<size_t> RegisterFlag(FlagEntry entry);
  */
 void UnregisterFlag(std::string_view name);
 
-bool SetFlagByName(std::string_view name, std::string_view value);
+// `persist` marks the cvar so it gets written by SaveConfig, meaning the
+// caller represents an explicit user choice (settings overlay, config file
+// load) rather than a CLI arg, env override, or programmatic/mod change.
+bool SetFlagByName(std::string_view name, std::string_view value, bool persist = false);
 std::string GetFlagByName(std::string_view name);
 
 // Invoke a registered command by name, passing the raw argument text.
