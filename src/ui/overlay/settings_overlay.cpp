@@ -356,7 +356,7 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
               auto vk = ImGuiKeyToVirtualKey(imgui_key);
               std::string name = rex::ui::VirtualKeyToString(vk);
               if (!name.empty()) {
-                rex::cvar::SetFlagByName(entry.name, name);
+                rex::cvar::SetFlagByName(entry.name, name, /*persist=*/true);
               }
               capturing_bind_name_.clear();
               break;
@@ -365,7 +365,7 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
           for (int mb = 0; mb < 3; ++mb) {
             if (ImGui::IsMouseClicked(mb)) {
               const char* names[] = {"LMB", "RMB", "MMB"};
-              rex::cvar::SetFlagByName(entry.name, names[mb]);
+              rex::cvar::SetFlagByName(entry.name, names[mb], /*persist=*/true);
               capturing_bind_name_.clear();
               break;
             }
@@ -380,7 +380,7 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
         }
         ImGui::SameLine();
         if (ImGui::SmallButton("Reset##v")) {
-          rex::cvar::SetFlagByName(entry.name, entry.default_value);
+          rex::cvar::SetFlagByName(entry.name, entry.default_value, /*persist=*/true);
         }
       }
 
@@ -438,7 +438,7 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
       if (entry.type == rex::cvar::FlagType::Boolean) {
         bool v = (current_val == "true");
         if (rex::ui::ToggleSwitch("##v", &v)) {
-          rex::cvar::SetFlagByName(entry.name, v ? "true" : "false");
+          rex::cvar::SetFlagByName(entry.name, v ? "true" : "false", /*persist=*/true);
         }
       } else if (entry.type == rex::cvar::FlagType::String &&
                  !entry.constraints.allowed_values.empty()) {
@@ -454,7 +454,7 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
           for (int i = 0; i < static_cast<int>(opts.size()); ++i) {
             bool sel = (i == cur_idx);
             if (ImGui::Selectable(opts[i].c_str(), sel)) {
-              rex::cvar::SetFlagByName(entry.name, opts[i]);
+              rex::cvar::SetFlagByName(entry.name, opts[i], /*persist=*/true);
             }
             if (sel)
               ImGui::SetItemDefaultFocus();
@@ -472,7 +472,7 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
             entry.constraints.max.has_value() ? static_cast<int>(*entry.constraints.max) : INT_MAX;
         if (ImGui::InputInt("##v", &v)) {
           v = std::clamp(v, vmin, vmax);
-          rex::cvar::SetFlagByName(entry.name, std::to_string(v));
+          rex::cvar::SetFlagByName(entry.name, std::to_string(v), /*persist=*/true);
         }
       } else if (entry.type == rex::cvar::FlagType::Double) {
         double v = std::atof(current_val.c_str());
@@ -481,7 +481,7 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
             v = std::max(v, *entry.constraints.min);
           if (entry.constraints.max)
             v = std::min(v, *entry.constraints.max);
-          rex::cvar::SetFlagByName(entry.name, std::to_string(v));
+          rex::cvar::SetFlagByName(entry.name, std::to_string(v), /*persist=*/true);
         }
       } else if (entry.type == rex::cvar::FlagType::Command) {
         if (ImGui::Button(std::string(entry.name + "##v").c_str())) {
@@ -490,8 +490,9 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
       } else {
         char buf[256];
         rex::string::copy_truncating(buf, current_val, sizeof(buf));
-        if (ImGui::InputText("##v", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue)) {
-          rex::cvar::SetFlagByName(entry.name, buf);
+        ImGui::InputText("##v", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue);
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+          rex::cvar::SetFlagByName(entry.name, buf, /*persist=*/true);
         }
       }
     }
