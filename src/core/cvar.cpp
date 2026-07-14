@@ -102,7 +102,7 @@ void ApplyTomlTable(const toml::table& table, const std::string& prefix) {
         std::lock_guard lock(GetRegistryMutex());
         GetPendingValuesStorage()[full_key].config = value_str;
         REXLOG_DEBUG("Config: '{}' deferred (cvar not yet registered)", full_key);
-      } else if (SetFlagByName(full_key, value_str)) {
+      } else if (SetFlagByName(full_key, value_str, /*persist=*/true)) {
         REXLOG_DEBUG("Config: {} = {}", full_key, value_str);
       } else {
         REXLOG_WARN("Config: invalid value for cvar '{}'", full_key);
@@ -129,6 +129,35 @@ void MarkPendingRestart(std::string_view name) {
   if (std::find(pending.begin(), pending.end(), name_str) == pending.end()) {
     pending.push_back(name_str);
   }
+}
+
+// Escapes a value for use inside a TOML basic (double-quoted) string.
+std::string EscapeTomlString(std::string_view value) {
+  std::string result;
+  result.reserve(value.size());
+  for (char c : value) {
+    switch (c) {
+      case '\\':
+        result += "\\\\";
+        break;
+      case '"':
+        result += "\\\"";
+        break;
+      case '\n':
+        result += "\\n";
+        break;
+      case '\r':
+        result += "\\r";
+        break;
+      case '\t':
+        result += "\\t";
+        break;
+      default:
+        result += c;
+        break;
+    }
+  }
+  return result;
 }
 
 bool ValidateConstraints(const FlagEntry& entry, std::string_view value) {
@@ -226,6 +255,7 @@ std::optional<size_t> RegisterFlag(FlagEntry entry) {
     if (pending_it != pending.end()) {
       if (pending_it->second.config) {
         stored.setter(*pending_it->second.config);
+        stored.persist_to_config = true;
       }
       pending.erase(pending_it);
     }
@@ -268,14 +298,14 @@ void FlagRegistrar::apply_(std::function<void(FlagEntry&)> fn) {
   fn(GetRegistryStorage()[it->second]);
 }
 
-bool SetFlagByName(std::string_view name, std::string_view value) {
+bool SetFlagByName(std::string_view name, std::string_view value, bool persist) {
   std::lock_guard lock(GetRegistryMutex());
   auto it = GetRegistryIndex().find(std::string(name));
   if (it == GetRegistryIndex().end()) {
     return false;
   }
 
-  const auto& entry = GetRegistryStorage()[it->second];
+  auto& entry = GetRegistryStorage()[it->second];
 
   // Check lifecycle
   if (!g_lifecycle_override && entry.lifecycle == Lifecycle::kInitOnly && IsFinalized()) {
@@ -289,6 +319,10 @@ bool SetFlagByName(std::string_view name, std::string_view value) {
   }
 
   bool success = entry.setter(value);
+
+  if (success && persist) {
+    entry.persist_to_config = true;
+  }
 
   // Track pending restart flags
   if (success && entry.lifecycle == Lifecycle::kRequiresRestart) {
@@ -490,9 +524,9 @@ std::string SerializeToTOML() {
   std::lock_guard lock(GetRegistryMutex());
   std::string result;
   for (const auto& entry : GetRegistryStorage()) {
-    if (entry.getter() != entry.default_value) {
+    if (entry.persist_to_config && entry.getter() != entry.default_value) {
       if (entry.type == FlagType::String) {
-        result += entry.name + " = \"" + entry.getter() + "\"\n";
+        result += entry.name + " = \"" + EscapeTomlString(entry.getter()) + "\"\n";
       } else {
         result += entry.name + " = " + entry.getter() + "\n";
       }
@@ -505,9 +539,10 @@ std::string SerializeToTOML(std::string_view category) {
   std::lock_guard lock(GetRegistryMutex());
   std::string result;
   for (const auto& entry : GetRegistryStorage()) {
-    if (entry.category == category && entry.getter() != entry.default_value) {
+    if (entry.category == category && entry.persist_to_config &&
+        entry.getter() != entry.default_value) {
       if (entry.type == FlagType::String) {
-        result += entry.name + " = \"" + entry.getter() + "\"\n";
+        result += entry.name + " = \"" + EscapeTomlString(entry.getter()) + "\"\n";
       } else {
         result += entry.name + " = " + entry.getter() + "\n";
       }
