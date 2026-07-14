@@ -371,6 +371,12 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   SetupFontTexture();
 
   if (dialogs_.empty()) {
+    // No dialogs left to want text input (e.g. the last one was just
+    // removed); make sure the window doesn't stay flagged as a text field.
+    if (text_input_active_) {
+      text_input_active_ = false;
+      window_->SetTextInputActive(false);
+    }
     return;
   }
 
@@ -406,6 +412,12 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   if (draw_data) {
     RenderDrawLists(draw_data, ui_draw_context);
   }
+
+  // Only mark the window as an active text input field while an ImGui
+  // text-entry widget is actually focused, so the OS/desktop input-assist
+  // UI (IME, autocomplete) doesn't kick in during normal button gameplay.
+  text_input_active_ = io.WantTextInput;
+  window_->SetTextInputActive(text_input_active_);
 
   if (reset_mouse_position_after_next_frame_) {
     reset_mouse_position_after_next_frame_ = false;

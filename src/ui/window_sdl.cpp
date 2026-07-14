@@ -161,8 +161,14 @@ bool WindowSDL::OpenImpl() {
     // Borderless desktop fullscreen (a NULL display mode is SDL3's default).
     SDL_SetWindowFullscreen(sdl_window_, true);
   }
-  // SDL3 requires explicit opt-in for text input events.
-  SDL_StartTextInput(sdl_window_);
+  // SDL3 requires explicit opt-in for text input events. We only want the
+  // character events (e.g. for ImGui overlays), not an OS on-screen keyboard
+  // popping up unprompted (observed on SteamOS/gamescope). Text input itself
+  // is left off until a text-entry widget is actually focused (see
+  // SetTextInputActive) so the window isn't flagged as an active text field
+  // for the whole session, which can trigger unwanted desktop input-assist
+  // UI (IME candidate windows, autocomplete) during normal gameplay.
+  SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "0");
   ApplyCursorVisibilityNow();
   SDL_ShowWindow(sdl_window_);
 
@@ -252,15 +258,21 @@ void WindowSDL::ApplyNewTitle() {
 
 void WindowSDL::ApplyNewMouseCapture() {
   SDL_CaptureMouse(true);
-  if (sdl_window_) {
-    SDL_StopTextInput(sdl_window_);
-  }
 }
 
 void WindowSDL::ApplyNewMouseRelease() {
   SDL_CaptureMouse(false);
-  if (sdl_window_) {
+}
+
+void WindowSDL::SetTextInputActive(bool active) {
+  if (!sdl_window_ || text_input_active_ == active) {
+    return;
+  }
+  text_input_active_ = active;
+  if (active) {
     SDL_StartTextInput(sdl_window_);
+  } else {
+    SDL_StopTextInput(sdl_window_);
   }
 }
 

@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <memory>
 #include <string_view>
+#include <vector>
 
 #include <SDL3/SDL.h>
 
@@ -33,6 +34,7 @@ class WindowSDL final : public Window {
 
   void* GetNativeWindowHandle() const override;
   void WarpMouseInWindow(int32_t x, int32_t y) override;
+  void SetTextInputActive(bool active) override;
 
   // Called by SDLWindowedAppContext on the UI thread.
   void HandleWindowEvent(SDL_Event& event);
@@ -77,6 +79,13 @@ class WindowSDL final : public Window {
   std::atomic<bool> paint_pending_{false};
   // Auto-hide cursor bookkeeping (CursorVisibility::kAutoHidden).
   SDL_TimerID cursor_hide_timer_ = 0;
+  // Tracks whether SDL_StartTextInput has been called, so SetTextInputActive
+  // only calls SDL when the state actually changes. See SetTextInputActive.
+  bool text_input_active_ = false;
+  // Raw encoded image bytes (e.g. PNG) from the last LoadAndApplyIcon call,
+  // kept so the icon can be (re)applied once the native window exists (see
+  // OpenImpl and the "Icon" contract on Window::OpenImpl).
+  std::vector<uint8_t> icon_data_;
 };
 
 }  // namespace rex::ui
