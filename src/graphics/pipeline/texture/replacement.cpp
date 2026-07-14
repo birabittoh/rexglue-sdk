@@ -37,6 +37,22 @@
 #define STBI_WRITE_NO_STDIO  // we use the callback API with std::ofstream
 #include <stb_image_write.h>
 
+REXCVAR_DEFINE_BOOL(texture_dump_enabled, false, "GPU/Texture Replacement",
+                    "Dump all decoded textures to disk as DDS files for replacement authoring")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
+REXCVAR_DEFINE_STRING(texture_dump_format, "dds", "GPU/Texture Replacement",
+                      "Output format for texture dumps: \"dds\" (lossless, preserves BC blocks) "
+                      "or \"png\" (RGBA8; BC-compressed textures are decompressed to RGBA8 first)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload)
+    .allowed({"dds", "png"});
+
+REXCVAR_DEFINE_STRING(texture_dump_skip_sizes, "640x360,1280x720", "GPU/Texture Replacement",
+                      "Comma-separated <width>x<height> pairs to skip when dumping (e.g. FMV/"
+                      "cutscene frame sizes, which are unique per frame and flood the dump "
+                      "directory); empty disables skipping")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 namespace rex::graphics {
 
 namespace {

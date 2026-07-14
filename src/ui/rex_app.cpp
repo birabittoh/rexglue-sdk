@@ -477,6 +477,9 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
       shader_debugger_overlay_.reset();
     } else {
       auto snapshot_provider = [this]() {
+        if (shader_debugger_override_.snapshot_provider) {
+          return shader_debugger_override_.snapshot_provider();
+        }
         std::vector<ui::ShaderDebuggerEntry> out;
         if (!runtime_)
           return out;
@@ -502,6 +505,10 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
         return out;
       };
       auto disable_setter = [this](uint64_t hash, bool disabled) {
+        if (shader_debugger_override_.disable_setter) {
+          shader_debugger_override_.disable_setter(hash, disabled);
+          return;
+        }
         if (!runtime_)
           return;
         auto* gs = static_cast<rex::graphics::GraphicsSystem*>(runtime_->graphics_system());
@@ -521,6 +528,9 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
         }
       };
       auto details_provider = [this](uint64_t hash) {
+        if (shader_debugger_override_.details_provider) {
+          return shader_debugger_override_.details_provider(hash);
+        }
         ui::ShaderDebuggerDetails out;
         if (!runtime_)
           return out;
@@ -553,6 +563,9 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
       };
       auto binary_replacer = [this](uint64_t hash, uint64_t modification,
                                     std::vector<uint8_t> binary) {
+        if (shader_debugger_override_.binary_replacer) {
+          return shader_debugger_override_.binary_replacer(hash, modification, std::move(binary));
+        }
         if (!runtime_)
           return false;
         auto* gs = static_cast<rex::graphics::GraphicsSystem*>(runtime_->graphics_system());
@@ -564,6 +577,10 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
         return cp->ReplaceShaderTranslationBinary(hash, modification, std::move(binary));
       };
       auto profiling_toggle = [this](bool enabled) {
+        if (shader_debugger_override_.profiling_toggle) {
+          shader_debugger_override_.profiling_toggle(enabled);
+          return;
+        }
         if (!runtime_)
           return;
         auto* gs = static_cast<rex::graphics::GraphicsSystem*>(runtime_->graphics_system());
@@ -575,6 +592,10 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
         cp->SetShaderProfilingEnabled(enabled);
       };
       auto profiling_resetter = [this]() {
+        if (shader_debugger_override_.profiling_resetter) {
+          shader_debugger_override_.profiling_resetter();
+          return;
+        }
         if (!runtime_)
           return;
         auto* gs = static_cast<rex::graphics::GraphicsSystem*>(runtime_->graphics_system());
@@ -830,6 +851,10 @@ void ReXApp::SetGuestFrameStats(ui::DebugOverlayDialog::FrameStatsProvider provi
   if (debug_overlay_) {
     debug_overlay_->SetStatsProvider(provider);
   }
+}
+
+void ReXApp::SetShaderDebuggerOverride(ShaderDebuggerOverride override) {
+  shader_debugger_override_ = std::move(override);
 }
 
 }  // namespace rex

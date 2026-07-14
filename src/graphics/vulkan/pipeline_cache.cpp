@@ -1466,7 +1466,7 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(SpirvShaderTranslator& transla
                                ? rex::filesystem::GetExecutableFolder() / "dumps"
                                : shader_dump_root_;
     const auto dump_path = dump_root / "shaders" /
-                           fmt::format("shader_{:016X}_{:016X}.vk.bin.{}", shader.ucode_data_hash(),
+                           fmt::format("{:016X}_{:016X}.vk.bin.{}", shader.ucode_data_hash(),
                                        translation.modification(), type_ext);
     std::filesystem::create_directories(dump_path.parent_path());
     FILE* f = rex::filesystem::OpenFile(dump_path, "wb");
