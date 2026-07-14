@@ -16,6 +16,7 @@
 #include <optional>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <CLI/CLI.hpp>
 
@@ -90,6 +91,9 @@ bool ApplyFromSource(FlagEntry& entry, std::string_view value, Source source) {
     return false;
   }
   entry.source = source;
+  if (source == Source::kConfig) {
+    entry.persist_to_config = true;
+  }
   return true;
 }
 
@@ -155,6 +159,35 @@ void MarkPendingRestart(std::string_view name) {
   if (std::find(pending.begin(), pending.end(), name_str) == pending.end()) {
     pending.push_back(name_str);
   }
+}
+
+// Escapes a value for use inside a TOML basic (double-quoted) string.
+std::string EscapeTomlString(std::string_view value) {
+  std::string result;
+  result.reserve(value.size());
+  for (char c : value) {
+    switch (c) {
+      case '\\':
+        result += "\\\\";
+        break;
+      case '"':
+        result += "\\\"";
+        break;
+      case '\n':
+        result += "\\n";
+        break;
+      case '\r':
+        result += "\\r";
+        break;
+      case '\t':
+        result += "\\t";
+        break;
+      default:
+        result += c;
+        break;
+    }
+  }
+  return result;
 }
 
 bool ValidateConstraints(const FlagEntry& entry, std::string_view value) {
@@ -321,6 +354,9 @@ ApplyResult SetFlagFromSource(std::string_view name, std::string_view value, Sou
     return ApplyResult::kRejected;
   }
   entry.source = source;
+  if (source == Source::kConfig) {
+    entry.persist_to_config = true;
+  }
 
   if (entry.lifecycle == Lifecycle::kRequiresRestart) {
     MarkPendingRestart(name);
@@ -339,8 +375,19 @@ ApplyResult SetFlagFromSource(std::string_view name, std::string_view value, Sou
 
 }  // namespace
 
-bool SetFlagByName(std::string_view name, std::string_view value) {
-  return SetFlagFromSource(name, value, Source::kRuntime) == ApplyResult::kApplied;
+bool SetFlagByName(std::string_view name, std::string_view value, bool persist) {
+  ApplyResult result = SetFlagFromSource(name, value, Source::kRuntime);
+  if (result != ApplyResult::kApplied) {
+    return false;
+  }
+  if (persist) {
+    std::lock_guard lock(GetRegistryMutex());
+    auto it = GetRegistryIndex().find(std::string(name));
+    if (it != GetRegistryIndex().end()) {
+      GetRegistryStorage()[it->second].persist_to_config = true;
+    }
+  }
+  return true;
 }
 
 bool SetFlagFromCommandLine(std::string_view name, std::string_view value) {
@@ -539,9 +586,9 @@ std::string SerializeToTOML() {
   std::lock_guard lock(GetRegistryMutex());
   std::string result;
   for (const auto& entry : GetRegistryStorage()) {
-    if (entry.getter() != entry.default_value) {
+    if (entry.persist_to_config && entry.getter() != entry.default_value) {
       if (entry.type == FlagType::String) {
-        result += entry.name + " = \"" + entry.getter() + "\"\n";
+        result += entry.name + " = \"" + EscapeTomlString(entry.getter()) + "\"\n";
       } else {
         result += entry.name + " = " + entry.getter() + "\n";
       }
@@ -554,9 +601,10 @@ std::string SerializeToTOML(std::string_view category) {
   std::lock_guard lock(GetRegistryMutex());
   std::string result;
   for (const auto& entry : GetRegistryStorage()) {
-    if (entry.category == category && entry.getter() != entry.default_value) {
+    if (entry.category == category && entry.persist_to_config &&
+        entry.getter() != entry.default_value) {
       if (entry.type == FlagType::String) {
-        result += entry.name + " = \"" + entry.getter() + "\"\n";
+        result += entry.name + " = \"" + EscapeTomlString(entry.getter()) + "\"\n";
       } else {
         result += entry.name + " = " + entry.getter() + "\n";
       }
@@ -690,11 +738,112 @@ bool IsFinalized() {
   return g_finalized;
 }
 
+namespace {
+
+// Returns the key of a `key = value` line, or nullopt if the line is blank,
+// a comment, or otherwise not a recognizable assignment.
+std::optional<std::string> ExtractTomlKey(const std::string& line) {
+  auto first = line.find_first_not_of(" \t");
+  if (first == std::string::npos || line[first] == '#') {
+    return std::nullopt;
+  }
+  auto eq = line.find('=');
+  if (eq == std::string::npos) {
+    return std::nullopt;
+  }
+  auto last = line.find_last_not_of(" \t", eq - 1);
+  if (last == std::string::npos || last < first) {
+    return std::nullopt;
+  }
+  std::string key = line.substr(first, last - first + 1);
+  for (char c : key) {
+    if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '.' && c != '-') {
+      return std::nullopt;
+    }
+  }
+  return key;
+}
+
+// Finds the start of a trailing `#` comment, ignoring `#` inside quoted
+// strings. Returns npos if there is no trailing comment.
+size_t FindTomlCommentStart(const std::string& line) {
+  bool in_string = false;
+  for (size_t i = 0; i < line.size(); ++i) {
+    char c = line[i];
+    if (c == '"' && (i == 0 || line[i - 1] != '\\')) {
+      in_string = !in_string;
+    } else if (c == '#' && !in_string) {
+      return i;
+    }
+  }
+  return std::string::npos;
+}
+
+}  // namespace
+
 void SaveConfig(const std::filesystem::path& config_path) {
-  std::string content = SerializeToTOML();
-  if (content.empty()) {
-    REXLOG_DEBUG("SaveConfig: no modified flags to save");
-    return;
+  std::lock_guard lock(GetRegistryMutex());
+
+  std::unordered_map<std::string, const FlagEntry*> all_entries;
+  std::unordered_map<std::string, const FlagEntry*> to_write;
+  for (const auto& entry : GetRegistryStorage()) {
+    all_entries[entry.name] = &entry;
+    if (entry.persist_to_config && entry.getter() != entry.default_value) {
+      to_write[entry.name] = &entry;
+    }
+  }
+
+  auto format_value = [](const FlagEntry& entry) {
+    if (entry.type == FlagType::String) {
+      return "\"" + EscapeTomlString(entry.getter()) + "\"";
+    }
+    return entry.getter();
+  };
+
+  // Patch the existing file in place so blank lines, comments, and
+  // commented-out entries survive a Save. Lines for cvars already present
+  // in the file are updated to their current value in place (even if that
+  // value is now the default, so a reset-to-default is actually reflected);
+  // everything else not recognized as a known cvar's assignment is
+  // preserved verbatim.
+  std::vector<std::string> result;
+  if (std::filesystem::exists(config_path)) {
+    std::ifstream in(config_path);
+    std::string line;
+    while (std::getline(in, line)) {
+      auto key = ExtractTomlKey(line);
+      if (!key) {
+        result.push_back(line);
+        continue;
+      }
+
+      auto entry_it = all_entries.find(*key);
+      if (entry_it == all_entries.end()) {
+        result.push_back(line);
+        continue;
+      }
+
+      std::string new_line = *key + " = " + format_value(*entry_it->second);
+      size_t comment_start = FindTomlCommentStart(line);
+      if (comment_start != std::string::npos) {
+        new_line += "  " + line.substr(comment_start);
+      }
+      result.push_back(std::move(new_line));
+      to_write.erase(*key);
+    }
+  } else {
+    result.push_back("# Auto-generated cvar configuration");
+  }
+
+  if (!to_write.empty()) {
+    if (!result.empty() && !result.back().empty()) {
+      result.push_back("");
+    }
+    for (const auto& entry : GetRegistryStorage()) {
+      if (to_write.count(entry.name)) {
+        result.push_back(entry.name + " = " + format_value(entry));
+      }
+    }
   }
 
   try {
@@ -703,8 +852,9 @@ void SaveConfig(const std::filesystem::path& config_path) {
       REXLOG_ERROR("SaveConfig: failed to open {}", config_path.string());
       return;
     }
-    file << "# Auto-generated cvar configuration\n";
-    file << content;
+    for (const auto& line : result) {
+      file << line << "\n";
+    }
     REXLOG_INFO("Saved config to {}", config_path.string());
   } catch (const std::exception& e) {
     REXLOG_ERROR("SaveConfig: {}", e.what());
