@@ -22,6 +22,7 @@
 #include <rex/types.h>
 #include <rex/string.h>
 #include <rex/system/kernel_state.h>
+#include <rex/thread/timer_queue.h>
 #include <rex/system/xam/user_profile.h>
 #include <rex/system/xenumerator.h>
 #include <rex/system/xio.h>
@@ -478,13 +479,31 @@ u32 XamUserAreUsersFriends_entry(u32 user_index, u32 unk1, u32 unk2, mapped_u32 
 u32 XamShowSigninUI_entry(u32 unk, u32 unk_mask) {
   // Mask values vary. Probably matching user types? Local/remote?
 
-  // To fix game modes that display a 4 profile signin UI (even if playing
-  // alone):
-  // XN_SYS_SIGNINCHANGED
-  REX_KERNEL_STATE()->BroadcastNotification(0x0000000A, 1);
-  // Games seem to sit and loop until we trigger this notification:
-  // XN_SYS_UI (off)
-  REX_KERNEL_STATE()->BroadcastNotification(0x00000009, 0);
+  // Some guest state machines (e.g. Castlevania SOTN's Live-logon
+  // interstitial screen) latch on seeing XN_SYS_UI transition to *open*
+  // before they start watching for it to close again; if the open edge is
+  // never broadcast (or if open and close land in the same XNotifyGetNext
+  // drain, since the guest processes every queued notification per frame),
+  // the screen waits forever. Broadcast "open" now and defer
+  // "sign-in changed" + "closed" so the guest observes both edges on
+  // different frames — mirroring xeXamDispatchDialog's pre/post pattern,
+  // which can't be used here because this call has no overlapped and must
+  // not block the calling guest thread across both edges.
+  auto* kernel_state = REX_KERNEL_STATE();
+  // XN_SYS_UI (on)
+  kernel_state->BroadcastNotification(0x00000009, 1);
+  rex::thread::QueueTimerOnce(
+      [](void* userdata) {
+        auto* kernel_state = static_cast<KernelState*>(userdata);
+        // To fix game modes that display a 4 profile signin UI (even if
+        // playing alone):
+        // XN_SYS_SIGNINCHANGED
+        kernel_state->BroadcastNotification(0x0000000A, 1);
+        // Games seem to sit and loop until we trigger this notification:
+        // XN_SYS_UI (off)
+        kernel_state->BroadcastNotification(0x00000009, 0);
+      },
+      kernel_state, rex::thread::TimerQueueWaitItem::clock::now() + std::chrono::milliseconds(150));
   return X_ERROR_SUCCESS;
 }
 
