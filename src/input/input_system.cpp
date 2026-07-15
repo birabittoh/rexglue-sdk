@@ -31,30 +31,22 @@ namespace rex::input {
 
 namespace {
 
-struct ButtonRemapEntry {
-  X_INPUT_GAMEPAD_BUTTON button;
+// A physical input source (digital button or analog trigger) that can be
+// remapped to act as any other physical input, button or trigger alike.
+struct RemapEntry {
   const char* name;
+  X_INPUT_GAMEPAD_BUTTON button;  // 0 if this entry is a trigger.
   std::function<const std::string&()> get_target;
 };
 
+constexpr uint8_t kTriggerRemapThreshold = 30;  // Matches XINPUT_GAMEPAD_TRIGGER_THRESHOLD.
+
 }  // namespace
 
-#define REMAP_ALLOWED_VALUES \
-  {"dpad_up",                \
-   "dpad_down",              \
-   "dpad_left",              \
-   "dpad_right",             \
-   "start",                  \
-   "back",                   \
-   "left_thumb",             \
-   "right_thumb",            \
-   "left_shoulder",          \
-   "right_shoulder",         \
-   "guide",                  \
-   "a",                      \
-   "b",                      \
-   "x",                      \
-   "y"}
+#define REMAP_ALLOWED_VALUES                                                                      \
+  {"dpad_up",     "dpad_down",     "dpad_left",      "dpad_right", "start", "back", "left_thumb", \
+   "right_thumb", "left_shoulder", "right_shoulder", "guide",      "a",     "b",    "x",          \
+   "y",           "left_trigger",  "right_trigger"}
 
 REXCVAR_DEFINE_STRING(remap_dpad_up, "dpad_up", "Input/Remap/Controller", "D-pad up")
     .allowed(REMAP_ALLOWED_VALUES);
@@ -90,60 +82,95 @@ REXCVAR_DEFINE_STRING(remap_x, "x", "Input/Remap/Controller", "X button")
 REXCVAR_DEFINE_STRING(remap_y, "y", "Input/Remap/Controller", "Y button")
     .allowed(REMAP_ALLOWED_VALUES);
 
+REXCVAR_DEFINE_STRING(remap_left_trigger, "left_trigger", "Input/Remap/Controller", "Left trigger")
+    .allowed(REMAP_ALLOWED_VALUES);
+REXCVAR_DEFINE_STRING(remap_right_trigger, "right_trigger", "Input/Remap/Controller",
+                      "Right trigger")
+    .allowed(REMAP_ALLOWED_VALUES);
+
 #undef REMAP_ALLOWED_VALUES
 
 namespace {
 
-const std::vector<ButtonRemapEntry>& ButtonRemapTable() {
-  static const std::vector<ButtonRemapEntry> table = {
-      {X_INPUT_GAMEPAD_DPAD_UP, "dpad_up",
+const std::vector<RemapEntry>& RemapTable() {
+  static const std::vector<RemapEntry> table = {
+      {"dpad_up", X_INPUT_GAMEPAD_DPAD_UP,
        []() -> const std::string& { return REXCVAR_GET(remap_dpad_up); }},
-      {X_INPUT_GAMEPAD_DPAD_DOWN, "dpad_down",
+      {"dpad_down", X_INPUT_GAMEPAD_DPAD_DOWN,
        []() -> const std::string& { return REXCVAR_GET(remap_dpad_down); }},
-      {X_INPUT_GAMEPAD_DPAD_LEFT, "dpad_left",
+      {"dpad_left", X_INPUT_GAMEPAD_DPAD_LEFT,
        []() -> const std::string& { return REXCVAR_GET(remap_dpad_left); }},
-      {X_INPUT_GAMEPAD_DPAD_RIGHT, "dpad_right",
+      {"dpad_right", X_INPUT_GAMEPAD_DPAD_RIGHT,
        []() -> const std::string& { return REXCVAR_GET(remap_dpad_right); }},
-      {X_INPUT_GAMEPAD_START, "start",
+      {"start", X_INPUT_GAMEPAD_START,
        []() -> const std::string& { return REXCVAR_GET(remap_start); }},
-      {X_INPUT_GAMEPAD_BACK, "back",
+      {"back", X_INPUT_GAMEPAD_BACK,
        []() -> const std::string& { return REXCVAR_GET(remap_back); }},
-      {X_INPUT_GAMEPAD_LEFT_THUMB, "left_thumb",
+      {"left_thumb", X_INPUT_GAMEPAD_LEFT_THUMB,
        []() -> const std::string& { return REXCVAR_GET(remap_left_thumb); }},
-      {X_INPUT_GAMEPAD_RIGHT_THUMB, "right_thumb",
+      {"right_thumb", X_INPUT_GAMEPAD_RIGHT_THUMB,
        []() -> const std::string& { return REXCVAR_GET(remap_right_thumb); }},
-      {X_INPUT_GAMEPAD_LEFT_SHOULDER, "left_shoulder",
+      {"left_shoulder", X_INPUT_GAMEPAD_LEFT_SHOULDER,
        []() -> const std::string& { return REXCVAR_GET(remap_left_shoulder); }},
-      {X_INPUT_GAMEPAD_RIGHT_SHOULDER, "right_shoulder",
+      {"right_shoulder", X_INPUT_GAMEPAD_RIGHT_SHOULDER,
        []() -> const std::string& { return REXCVAR_GET(remap_right_shoulder); }},
-      {X_INPUT_GAMEPAD_GUIDE, "guide",
+      {"guide", X_INPUT_GAMEPAD_GUIDE,
        []() -> const std::string& { return REXCVAR_GET(remap_guide); }},
-      {X_INPUT_GAMEPAD_A, "a", []() -> const std::string& { return REXCVAR_GET(remap_a); }},
-      {X_INPUT_GAMEPAD_B, "b", []() -> const std::string& { return REXCVAR_GET(remap_b); }},
-      {X_INPUT_GAMEPAD_X, "x", []() -> const std::string& { return REXCVAR_GET(remap_x); }},
-      {X_INPUT_GAMEPAD_Y, "y", []() -> const std::string& { return REXCVAR_GET(remap_y); }},
+      {"a", X_INPUT_GAMEPAD_A, []() -> const std::string& { return REXCVAR_GET(remap_a); }},
+      {"b", X_INPUT_GAMEPAD_B, []() -> const std::string& { return REXCVAR_GET(remap_b); }},
+      {"x", X_INPUT_GAMEPAD_X, []() -> const std::string& { return REXCVAR_GET(remap_x); }},
+      {"y", X_INPUT_GAMEPAD_Y, []() -> const std::string& { return REXCVAR_GET(remap_y); }},
+      {"left_trigger", static_cast<X_INPUT_GAMEPAD_BUTTON>(0),
+       []() -> const std::string& { return REXCVAR_GET(remap_left_trigger); }},
+      {"right_trigger", static_cast<X_INPUT_GAMEPAD_BUTTON>(0),
+       []() -> const std::string& { return REXCVAR_GET(remap_right_trigger); }},
   };
   return table;
 }
 
-X_INPUT_GAMEPAD_BUTTON ButtonByName(const std::string& name) {
-  for (auto& entry : ButtonRemapTable()) {
+const RemapEntry* EntryByName(const std::string& name) {
+  for (auto& entry : RemapTable()) {
     if (name == entry.name) {
-      return entry.button;
+      return &entry;
     }
   }
-  return static_cast<X_INPUT_GAMEPAD_BUTTON>(0);
+  return nullptr;
 }
 
-// Applies the physical controller button remap table to a raw button bitmask.
-uint16_t ApplyButtonRemap(uint16_t buttons) {
-  uint16_t remapped = 0;
-  for (auto& entry : ButtonRemapTable()) {
-    if (buttons & entry.button) {
-      remapped |= static_cast<uint16_t>(ButtonByName(entry.get_target()));
+// Applies the physical input remap table, allowing any digital button or
+// analog trigger to be reassigned to act as any other button or trigger.
+void ApplyRemap(uint16_t orig_buttons, uint8_t orig_left_trigger, uint8_t orig_right_trigger,
+                uint16_t& out_buttons, uint8_t& out_left_trigger, uint8_t& out_right_trigger) {
+  out_buttons = 0;
+  out_left_trigger = 0;
+  out_right_trigger = 0;
+
+  for (auto& entry : RemapTable()) {
+    bool active;
+    uint8_t magnitude;
+    if (entry.button) {
+      active = (orig_buttons & entry.button) != 0;
+      magnitude = 255;
+    } else if (std::string(entry.name) == "left_trigger") {
+      magnitude = orig_left_trigger;
+      active = magnitude > kTriggerRemapThreshold;
+    } else {
+      magnitude = orig_right_trigger;
+      active = magnitude > kTriggerRemapThreshold;
+    }
+    if (!active) {
+      continue;
+    }
+
+    const std::string& target = entry.get_target();
+    if (target == "left_trigger") {
+      out_left_trigger = std::max(out_left_trigger, magnitude);
+    } else if (target == "right_trigger") {
+      out_right_trigger = std::max(out_right_trigger, magnitude);
+    } else if (const RemapEntry* target_entry = EntryByName(target)) {
+      out_buttons |= static_cast<uint16_t>(target_entry->button);
     }
   }
-  return remapped;
 }
 
 }  // namespace
@@ -240,7 +267,14 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
     return any_connected ? X_ERROR_EMPTY : X_ERROR_DEVICE_NOT_CONNECTED;
   }
 
-  merged.gamepad.buttons = ApplyButtonRemap(static_cast<uint16_t>(merged.gamepad.buttons));
+  uint16_t remapped_buttons;
+  uint8_t remapped_left_trigger, remapped_right_trigger;
+  ApplyRemap(static_cast<uint16_t>(merged.gamepad.buttons), merged.gamepad.left_trigger,
+             merged.gamepad.right_trigger, remapped_buttons, remapped_left_trigger,
+             remapped_right_trigger);
+  merged.gamepad.buttons = remapped_buttons;
+  merged.gamepad.left_trigger = remapped_left_trigger;
+  merged.gamepad.right_trigger = remapped_right_trigger;
 
   if (out_state) {
     *out_state = merged;
