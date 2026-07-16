@@ -200,7 +200,7 @@ void BuilderContext::emit_function_call(uint32_t address) {
         return;
       }
 
-      println("\t{}(ctx, base);", name);
+      println("\tREX_CALL_FUNC({}, 0x{:08X});", name, address);
       return;
     }
 
