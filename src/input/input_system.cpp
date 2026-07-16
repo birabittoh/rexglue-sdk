@@ -214,6 +214,12 @@ void InputSystem::SetActiveCallback(std::function<bool()> callback) {
   }
 }
 
+void InputSystem::SetForceActive(bool force) {
+  for (auto& driver : drivers_) {
+    driver->set_force_active(force);
+  }
+}
+
 void InputSystem::SetDeviceAssignment(std::unique_ptr<DeviceAssignment> assignment) {
   assignment_ = std::move(assignment);
   if (assignment_) {
