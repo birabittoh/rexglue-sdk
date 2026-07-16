@@ -35,6 +35,8 @@ class WindowSDL final : public Window {
   void* GetNativeWindowHandle() const override;
   void WarpMouseInWindow(int32_t x, int32_t y) override;
   void SetTextInputActive(bool active) override;
+  std::string GetClipboardText() override;
+  void SetClipboardText(const std::string& text) override;
 
   // Called by SDLWindowedAppContext on the UI thread.
   void HandleWindowEvent(SDL_Event& event);
