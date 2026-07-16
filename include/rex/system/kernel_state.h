@@ -45,6 +45,10 @@
 #include <rex/thread/mutex.h>
 #include <rex/types.h>
 
+namespace rex::graphics {
+struct PacketInfo;
+}  // namespace rex::graphics
+
 //=============================================================================
 // Kernel Import Trace Helpers
 //=============================================================================
@@ -228,6 +232,47 @@ class KernelState {
   DPCImpersonationScope BeginDPCImpersonation();
   void EndDPCImpersonation(const DPCImpersonationScope& scope);
 
+  // Registers the guest's display interrupt callback (normally set via
+  // VdSetGraphicsInterruptCallback) and, if no GraphicsSystem is loaded
+  // (headless / no gpu_plugin), spins up a host timer thread that dispatches
+  // it at the configured guest refresh rate. This is what keeps the guest's
+  // own frame-driven logic -- audio submission, input polling, timers --
+  // progressing when there's no GPU emulation to generate real vblanks.
+  void SetGraphicsInterruptCallback(uint32_t callback, uint32_t user_data);
+  void DispatchGraphicsInterruptCallback(uint32_t source, uint32_t cpu);
+
+  // Headless ring-buffer stand-in: with no GraphicsSystem, nothing ever
+  // consumes submitted GPU commands, so guest code that waits for the ring
+  // buffer's read pointer (mirrored via VdEnableRingBufferRPtrWriteBack) to
+  // catch up to what it just submitted (written via the CP_RB_WPTR MMIO
+  // register) spins forever. This makes the GPU look infinitely fast: it
+  // installs an MMIO handler over the GPU register range and mirrors every
+  // CP_RB_WPTR write straight back into the read-pointer write-back address,
+  // so the guest always sees itself as caught up.
+  void EnableHeadlessRingBufferWriteBack(uint32_t ptr, uint32_t block_size_log2);
+  void InstallHeadlessGpuMmioIfNeeded();
+  // TEMP (headless-boot investigation): remember the ring buffer's physical
+  // base/size so HeadlessWriteRegister can dump newly-submitted PM4 packets.
+  void SetHeadlessRingBufferBase(uint32_t ptr, uint32_t size_log2);
+
+  // Native (non-xenos) command processor hook: when set, every fully-decoded
+  // PM4 packet submitted through the headless ring buffer -- including the
+  // contents of PM4_INDIRECT_BUFFER targets, which is where the actual
+  // per-frame draw stream lives -- is handed to this callback from
+  // HeadlessWriteRegister, in addition to (not instead of) the debug-log
+  // decode already there. Unlike that debug path, this is not deduplicated
+  // by indirect-buffer pointer/length and not subject to a total packet cap:
+  // the guest reuses the same physical addresses for a new frame's command
+  // buffer each frame, so skipping "already seen" pointers would silently
+  // drop real per-frame content. `packet_base` points into guest-mapped
+  // memory (still big-endian, as PacketDisassembler expects) and is only
+  // valid for the duration of the call. Must be set (once, from
+  // OnPreLaunchModule or earlier) before the guest thread starts submitting
+  // GPU commands -- not synchronized against concurrent Set/dispatch.
+  using NativeGpuCommandCallback =
+      std::function<void(const graphics::PacketInfo& info, const uint8_t* packet_base)>;
+  void SetNativeGpuCommandCallback(NativeGpuCommandCallback callback);
+
   uint32_t AllocateTLS(PPCContext* context);
   void FreeTLS(PPCContext* context, uint32_t slot);
 
@@ -396,6 +441,49 @@ class KernelState {
   std::atomic<bool> dispatch_thread_running_;
   std::atomic<bool> terminating_title_{false};
   object_ref<XHostThread> dispatch_thread_;
+
+  void StartHeadlessVblankThreadIfNeeded();
+  std::atomic<uint32_t> graphics_interrupt_callback_{0};
+  uint32_t graphics_interrupt_callback_data_ = 0;
+  std::atomic<bool> headless_vblank_thread_running_{false};
+  object_ref<XHostThread> headless_vblank_thread_;
+  // Headless scratch-register write-back state (SCRATCH_UMSK / SCRATCH_ADDR,
+  // GPU regs 0x01DC / 0x01DD): writes to SCRATCH_REG0-7 are mirrored into
+  // guest memory at scratch_addr + reg*4 when unmasked, matching
+  // CommandProcessor::WriteRegister. The guest D3D runtime's swap-completion
+  // interrupt machinery depends on this mirror (see HeadlessWriteRegister).
+  std::atomic<uint32_t> headless_scratch_umsk_{0};
+  std::atomic<uint32_t> headless_scratch_addr_{0};
+  // Last nonzero SCRATCH_ADDR ever written. The guest legitimately zeroes
+  // the register in some phases while still arming the interrupt-callback
+  // slot inside the block directly with the CPU, so the armed-slot check
+  // must key off the block's location, not the register's current value.
+  std::atomic<uint32_t> headless_scratch_block_addr_{0};
+  // Deferred command-stream CPU interrupts (PM4_INTERRUPT, source 1 = swap
+  // completion): queued when decoded while the guest's interrupt-callback
+  // slot is disarmed, delivered by the headless vblank thread once armed.
+  bool HeadlessStreamCpuInterruptSlotArmed();
+  std::atomic<uint32_t> headless_pending_cpu_interrupts_{0};
+  std::atomic<uint32_t> headless_pending_cpu_interrupt_mask_{0};
+
+  static void HeadlessWriteRegisterThunk(void* ppc_context, KernelState* kernel_state,
+                                         uint32_t addr, uint32_t value);
+  static uint32_t HeadlessReadRegisterThunk(void* ppc_context, KernelState* kernel_state,
+                                            uint32_t addr);
+  void HeadlessWriteRegister(uint32_t addr, uint32_t value);
+  uint32_t HeadlessReadRegister(uint32_t addr);
+  std::atomic<bool> headless_gpu_mmio_installed_{false};
+  std::atomic<uint32_t> ring_buffer_rptr_writeback_ptr_{0};
+  std::atomic<uint32_t> headless_ring_buffer_base_{0};
+  std::atomic<uint32_t> headless_ring_buffer_size_log2_{0};
+  // TEMP (headless-boot investigation): separate cursor for the PM4 packet
+  // decode walk in HeadlessWriteRegister. Packets can span multiple CP_RB_WPTR
+  // writes, so this must persist across calls rather than resetting to the
+  // most recent wptr each time (which would misalign mid-packet).
+  std::atomic<uint32_t> headless_ring_buffer_decode_pos_{0};
+  // Set once (before the guest thread starts submitting) via
+  // SetNativeGpuCommandCallback; see that method's doc comment.
+  NativeGpuCommandCallback native_gpu_command_callback_;
   // Must be guarded by the global critical region.
   util::NativeList dpc_list_;
   std::condition_variable_any dispatch_cond_;

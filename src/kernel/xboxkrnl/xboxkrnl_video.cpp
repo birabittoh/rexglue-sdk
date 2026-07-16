@@ -318,8 +318,10 @@ void VdSetGraphicsInterruptCallback_entry(u32 callback, mapped_void user_data) {
   // r4 = user_data (r4 of VdSetGraphicsInterruptCallback)
   auto* graphics_system = REX_KERNEL_STATE()->emulator()->graphics_system();
   if (!graphics_system) {
-    static std::atomic<bool> warned{false};
-    WarnNoGpuEmulation("VdSetGraphicsInterruptCallback", warned);
+    // No GPU plugin loaded: still honor the registration via KernelState's
+    // headless vblank pump, so guest frame-driven logic (audio, input,
+    // timers) keeps progressing even without real GPU emulation.
+    REX_KERNEL_STATE()->SetGraphicsInterruptCallback(callback, user_data.guest_address());
     return;
   }
   graphics_system->SetInterruptCallback(callback, user_data.guest_address());
@@ -331,8 +333,11 @@ void VdInitializeRingBuffer_entry(mapped_void ptr, i32 size_log2) {
   // Buffer pointers are from MmAllocatePhysicalMemory with WRITE_COMBINE.
   auto* graphics_system = REX_KERNEL_STATE()->emulator()->graphics_system();
   if (!graphics_system) {
-    static std::atomic<bool> warned{false};
-    WarnNoGpuEmulation("VdInitializeRingBuffer", warned);
+    // No real ring buffer to initialize; just make sure the GPU register
+    // MMIO range is wired up so CP_RB_WPTR writes go somewhere (see
+    // EnableHeadlessRingBufferWriteBack).
+    REX_KERNEL_STATE()->InstallHeadlessGpuMmioIfNeeded();
+    REX_KERNEL_STATE()->SetHeadlessRingBufferBase(ptr.guest_address(), size_log2);
     return;
   }
   graphics_system->InitializeRingBuffer(ptr.guest_address(), size_log2);
@@ -342,8 +347,9 @@ void VdEnableRingBufferRPtrWriteBack_entry(mapped_void ptr, i32 block_size_log2)
   // r4 = log2(block size), 6, usually --- <=19
   auto* graphics_system = REX_KERNEL_STATE()->emulator()->graphics_system();
   if (!graphics_system) {
-    static std::atomic<bool> warned{false};
-    WarnNoGpuEmulation("VdEnableRingBufferRPtrWriteBack", warned);
+    // No GPU plugin: mirror CP_RB_WPTR writes straight into this write-back
+    // address so guest code waiting for "GPU caught up" never spins forever.
+    REX_KERNEL_STATE()->EnableHeadlessRingBufferWriteBack(ptr.guest_address(), block_size_log2);
     return;
   }
   graphics_system->EnableReadPointerWriteBack(ptr.guest_address(), block_size_log2);
