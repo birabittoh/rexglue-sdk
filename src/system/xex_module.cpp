@@ -254,9 +254,10 @@ int XexModule::ApplyPatch(XexModule* module) {
   // If headers_source_offset is set, copy [source_offset:source_size] to
   // target_offset
   if (patch_header->delta_headers_source_offset) {
-    memcpy(header_ptr + patch_header->delta_headers_target_offset,
-           header_ptr + patch_header->delta_headers_source_offset,
-           patch_header->delta_headers_source_size);
+    // Source and target live in the same header buffer and may overlap.
+    memmove(header_ptr + patch_header->delta_headers_target_offset,
+            header_ptr + patch_header->delta_headers_source_offset,
+            patch_header->delta_headers_source_size);
   }
 
   // If new size is smaller than original, null out the difference
@@ -365,9 +366,10 @@ int XexModule::ApplyPatch(XexModule* module) {
   // If image_source_offset is set, copy [source_offset:source_size] to
   // target_offset
   if (patch_header->delta_image_source_offset) {
-    memcpy(base_exe + patch_header->delta_image_target_offset,
-           base_exe + patch_header->delta_image_source_offset,
-           patch_header->delta_image_source_size);
+    // Source and target live in the same loaded image and may overlap.
+    memmove(base_exe + patch_header->delta_image_target_offset,
+            base_exe + patch_header->delta_image_source_offset,
+            patch_header->delta_image_source_size);
   }
 
   // TODO: should we use new_image_size here instead?

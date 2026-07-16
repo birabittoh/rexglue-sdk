@@ -163,8 +163,11 @@ int lzxdelta_apply_patch(rex::xex2_delta_patch* patch, size_t patch_len, uint32_
         std::memset((char*)dest + cur_patch->new_addr, 0, cur_patch->uncompressed_len);
         break;
       case 1:  // copy from old -> new
-        std::memcpy((char*)dest + cur_patch->new_addr, (char*)dest + cur_patch->old_addr,
-                    cur_patch->uncompressed_len);
+        // old/new ranges frequently overlap (copies shifted by a few dozen
+        // bytes); memcpy is UB there and glibc's aarch64 memcpy actually
+        // clobbers the source mid-copy, corrupting the patched image.
+        std::memmove((char*)dest + cur_patch->new_addr, (char*)dest + cur_patch->old_addr,
+                     cur_patch->uncompressed_len);
         break;
       default:                                     // delta patch
         patch_sz = cur_patch->compressed_len - 4;  // -4 because of patch_data field
