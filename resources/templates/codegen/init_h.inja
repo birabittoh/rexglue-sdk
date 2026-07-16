@@ -220,9 +220,15 @@ extern PPCFuncMapping PPCFuncMappings[];
 // Function Dispatch
 //=============================================================================
 
-#define REX_CALL_FUNC(x) x(ctx, base)
-
 {% include "codegen/_indirect_call.inja" %}
+
+// Statically-resolved (bl) calls between recompiled functions. Routes through
+// the same per-module dispatch table REX_CALL_INDIRECT_FUNC uses, so a
+// runtime override installed via FunctionDispatcher::OverrideFunction is
+// observed by every caller, not just indirect/bctrl call sites. addr is a
+// compile-time-known guest address already known to be in this module's
+// code range, so no bounds check is needed (unlike REX_CALL_INDIRECT_FUNC).
+#define REX_CALL_FUNC(name, addr) REX_LOOKUP_FUNC(base, (addr))(ctx, base)
 
 //=============================================================================
 // Flush Mode
