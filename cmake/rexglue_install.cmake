@@ -112,6 +112,20 @@ if(REXGLUE_USE_VULKAN)
     )
 endif()
 
+# Install glslang's SPIRV headers: rex/graphics/pipeline/shader/spirv_builder.h
+# and spirv_translator.cpp's translation unit (not header-visible, but the
+# public spirv_translator.h transitively requires spirv_builder.h to compile)
+# both do #include <SPIRV/...>. SKIP_GLSLANG_INSTALL is set when adding the
+# glslang subdirectory (see thirdparty/CMakeLists.txt), so glslang's own
+# install rules never run -- without this, any downstream consumer of
+# SpirvShaderTranslator fails to compile with "SPIRV/SpvBuilder.h not found".
+if(REXGLUE_USE_VULKAN)
+    install(DIRECTORY thirdparty/glslang/SPIRV/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/SPIRV
+        FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
+    )
+endif()
+
 # Install the entry point source and ReXApp for SDK consumers
 install(FILES
     src/ui/windowed_app_main_sdl.cpp
