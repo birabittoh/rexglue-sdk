@@ -18,9 +18,6 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xam/user_profile.h>
 
-REXCVAR_DEFINE_STRING(user_name, "User", "User",
-                      "Gamertag / profile name shown in-game and on leaderboards");
-
 namespace rex {
 namespace system {
 namespace xam {
@@ -30,10 +27,7 @@ UserProfile::UserProfile() {
   // if non-zero, it prevents the user from playing the game.
   // "You do not have permissions to perform this operation."
   xuid_ = 0xB13EBABEBABEBABE;
-  name_ = REXCVAR_GET(user_name);
-  if (name_.empty()) {
-    name_ = "User";
-  }
+  name_ = "User";
 
   // https://cs.rin.ru/forum/viewtopic.php?f=38&t=60668&hilit=gfwl+live&start=195
   // https://github.com/arkem/py360/blob/master/py360/constants.py
@@ -98,6 +92,12 @@ UserProfile::UserProfile() {
   AddSetting(std::make_unique<BinarySetting>(0x63E83FFE));
   // XPROFILE_TITLE_SPECIFIC3
   AddSetting(std::make_unique<BinarySetting>(0x63E83FFD));
+}
+
+std::string UserProfile::name() const {
+  // The guest title owns the user_name cvar.
+  std::string cvar_name = REXCVAR_QUERY(std::string, user_name);
+  return cvar_name.empty() ? name_ : cvar_name;
 }
 
 void UserProfile::AddSetting(std::unique_ptr<Setting> setting) {
