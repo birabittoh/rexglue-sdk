@@ -218,7 +218,13 @@ class UserProfile {
 
   uint64_t xuid() const { return xuid_; }
   std::string name() const { return name_; }
-  uint32_t signin_state() const { return 1; }
+  // 0 = not signed in, 1 = signed in locally, 2 = signed in to Xbox Live.
+  // The game gates the Leaderboards screen (and score submission) on
+  // XamUserGetSigninState() == eXamUserSigninState_SignedInToLive (2): see
+  // sub_825C2CB0 / sub_825C5880 in default.xex, which otherwise show
+  // "You are not signed in to Xbox Live." Report Live so the local,
+  // TOML-backed leaderboard backend is reachable.
+  uint32_t signin_state() const { return 2; }
   uint32_t type() const { return 1 | 2; /* local | online profile? */ }
 
   void set_kernel_state(KernelState* ks) { kernel_state_ = ks; }
