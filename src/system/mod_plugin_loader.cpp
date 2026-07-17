@@ -37,6 +37,28 @@ std::string ModFileName(std::string_view stem, std::string_view postfix) {
 #endif
 }
 
+// Matches the "windows-x64" / "linux-x64" / "linux-arm64" keys mod-build
+// tooling (e.g. NocturneRecomp-Mods' scripts/make_mods.py) already writes
+// into a mod's `platform` manifest field, so a mod distribution zip can ship
+// one `code/<platform>/` subdirectory per platform side by side -- needed in
+// particular because linux-x64 and linux-arm64 both build to the same
+// lib<stem>.so name and would otherwise collide in a flat code/ directory.
+constexpr std::string_view ModPlatformDir() {
+#if REX_PLATFORM_WIN32
+  return "windows-x64";
+#elif REX_PLATFORM_LINUX
+#if defined(REX_ARCH_ARM64)
+  return "linux-arm64";
+#elif defined(REX_ARCH_AMD64)
+  return "linux-x64";
+#else
+  return "";
+#endif
+#else
+  return "";
+#endif
+}
+
 // Mod plugins stay loaded for process lifetime: guest threads may still be in
 // plugin code pages at shutdown, same rationale as GPU plugins.
 std::vector<platform::DynamicLibrary>& LoadedModPlugins() {
@@ -59,11 +81,28 @@ std::unique_ptr<IModPlugin> LoadModPlugin(const std::filesystem::path& mod_root,
     postfix = "rd";
   }
 
-  std::filesystem::path path = code_dir / ModFileName(code_stem, postfix);
+  // Try <platform>/<file> first (a multi-platform distribution, e.g. one
+  // pulled straight from a NocturneRecomp-Mods release zip, ships all
+  // platforms' binaries side by side this way and expects the host to pick
+  // its own), then fall back to a flat code/<file> layout (a mod built and
+  // installed for this host's platform only, the common local-dev case).
+  auto resolve = [&](std::string_view postfix) -> std::filesystem::path {
+    std::string_view platform_dir = ModPlatformDir();
+    if (!platform_dir.empty()) {
+      std::filesystem::path platform_path =
+          code_dir / platform_dir / ModFileName(code_stem, postfix);
+      if (std::filesystem::exists(platform_path)) {
+        return platform_path;
+      }
+    }
+    return code_dir / ModFileName(code_stem, postfix);
+  };
+
+  std::filesystem::path path = resolve(postfix);
   if (!postfix.empty() && !std::filesystem::exists(path)) {
     // Distributed mods commonly ship a single Release build; fall back to it
     // rather than refusing to load into a Debug/RelWithDebInfo host.
-    path = code_dir / ModFileName(code_stem, "");
+    path = resolve("");
   }
   if (!std::filesystem::exists(path)) {
     REXSYS_ERROR("Mod '{}' declares code '{}' but no DLL was found at {}", mod_name, code_stem,
