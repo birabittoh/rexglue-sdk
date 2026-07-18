@@ -12,6 +12,8 @@
 #include <rex/system/mod_plugin.h>
 
 #include <filesystem>
+#include <fstream>
+#include <string>
 #include <vector>
 
 #include <fmt/format.h>
@@ -57,6 +59,40 @@ constexpr std::string_view ModPlatformDir() {
 #else
   return "";
 #endif
+}
+
+// A mod DLL built against a different SDK build configuration links that
+// config's runtime library (e.g. librexruntime.so instead of
+// librexruntimerd.so). Loading it would map a second copy of the runtime and
+// its dependencies into the process, whose duplicated global initializers can
+// take down the loading thread. Detect the mismatch before loading by
+// searching the file for the other configs' runtime library names: the import
+// name appears verbatim in both ELF (.dynstr) and PE (import name table)
+// files, so a byte search doubles as an import check without a per-format
+// parser. Returns the offending library name, or empty if the plugin is
+// compatible (or unreadable -- the subsequent load will report that).
+std::string MismatchedRuntimeDependency(const std::filesystem::path& path,
+                                        std::string_view host_postfix) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    return {};
+  }
+  std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  static constexpr std::string_view kConfigPostfixes[] = {"", "d", "rd"};
+  for (std::string_view other_postfix : kConfigPostfixes) {
+    if (other_postfix == host_postfix) {
+      continue;
+    }
+    // Runtime libraries follow the same naming pattern as mod DLLs. None of
+    // the three variant names is a substring of another (the postfix sits
+    // before the extension), so exact filename search cannot false-positive
+    // across configs.
+    std::string other_name = ModFileName("rexruntime", other_postfix);
+    if (contents.find(other_name) != std::string::npos) {
+      return other_name;
+    }
+  }
+  return {};
 }
 
 // Mod plugins stay loaded for process lifetime: guest threads may still be in
@@ -107,6 +143,14 @@ std::unique_ptr<IModPlugin> LoadModPlugin(const std::filesystem::path& mod_root,
   if (!std::filesystem::exists(path)) {
     REXSYS_ERROR("Mod '{}' declares code '{}' but no DLL was found at {}", mod_name, code_stem,
                  path.string());
+    return nullptr;
+  }
+
+  if (std::string mismatched = MismatchedRuntimeDependency(path, postfix); !mismatched.empty()) {
+    REXSYS_ERROR(
+        "Mod '{}' code plugin was built against a different SDK build configuration (it links {}, "
+        "host config is {}); skipping it: {}",
+        mod_name, mismatched, kConfig, path.string());
     return nullptr;
   }
 
