@@ -23,6 +23,8 @@
 #include <rex/ui/flags.h>
 #include <rex/ui/window_sdl.h>
 
+REXCVAR_DECLARE(bool, renderdoc_enabled);
+
 namespace rex::ui {
 
 SDLWindowedAppContext::~SDLWindowedAppContext() {
@@ -45,6 +47,15 @@ bool SDLWindowedAppContext::Initialize() {
   // macOS presents via a CAMetalLayer surface obtained from the Cocoa driver.
   if (requested_driver.empty()) {
     requested_driver = "cocoa";
+  }
+#elif !REX_PLATFORM_WIN32
+  // RenderDoc cannot capture or present on Wayland; when injection is
+  // requested and the user hasn't already picked a driver, run through
+  // XWayland so the capture actually works.
+  if (requested_driver.empty() && REXCVAR_GET(renderdoc_enabled)) {
+    REXLOG_INFO(
+        "renderdoc_enabled: forcing the SDL x11 video driver (RenderDoc has no Wayland support)");
+    requested_driver = "x11";
   }
 #endif
   if (!requested_driver.empty()) {
