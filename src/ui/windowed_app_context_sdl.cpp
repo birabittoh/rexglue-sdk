@@ -15,9 +15,12 @@
 
 #include <SDL3/SDL.h>
 
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/platform.h>
 #include <rex/ui/window_sdl.h>
+
+REXCVAR_DECLARE(bool, renderdoc_enabled);
 
 namespace rex::ui {
 
@@ -33,6 +36,14 @@ SDLWindowedAppContext::~SDLWindowedAppContext() {
 bool SDLWindowedAppContext::Initialize() {
 #if !REX_PLATFORM_WIN32 && !defined(VK_USE_PLATFORM_WAYLAND_KHR)
   SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11");
+#elif !REX_PLATFORM_WIN32
+  // RenderDoc cannot capture or present on Wayland; when injection is
+  // requested, run through XWayland so the capture actually works.
+  if (REXCVAR_GET(renderdoc_enabled)) {
+    REXLOG_INFO(
+        "renderdoc_enabled: forcing the SDL x11 video driver (RenderDoc has no Wayland support)");
+    SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11");
+  }
 #endif
   if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
     REXLOG_ERROR("SDL_InitSubSystem(SDL_INIT_VIDEO) failed: {}", SDL_GetError());
