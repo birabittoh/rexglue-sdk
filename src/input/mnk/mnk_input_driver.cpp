@@ -351,20 +351,16 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
     mouse_rx = cached_rx_;
     mouse_ry = cached_ry_;
   } else {
+    DecayMouseAccumulator();
     if (REXCVAR_GET(mnk_mouse) && IsMouseLookActive()) {
       double sensitivity = REXCVAR_GET(mnk_sensitivity);
       constexpr double kBaseScale = 200.0;
-      mouse_rx = clamp16(static_cast<int32_t>(double(mouse_dx_) * sensitivity * kBaseScale));
-      mouse_ry = clamp16(static_cast<int32_t>(double(-mouse_dy_) * sensitivity * kBaseScale));
+      mouse_rx = clamp16(static_cast<int32_t>(mouse_dx_ * sensitivity * kBaseScale));
+      mouse_ry = clamp16(static_cast<int32_t>(-mouse_dy_ * sensitivity * kBaseScale));
     } else {
       mouse_rx = 0;
       mouse_ry = 0;
     }
-    // Drained unconditionally: deltas keep accumulating in OnMouseMove while
-    // the mouse is off, and toggling it on would otherwise dump the whole
-    // backlog into one frame as a camera snap.
-    mouse_dx_ = 0.0f;
-    mouse_dy_ = 0.0f;
     cached_rx_ = mouse_rx;
     cached_ry_ = mouse_ry;
     have_cached_stick_ = true;
@@ -463,8 +459,9 @@ void MnkInputDriver::ApplyMouseCaptureFromUIThread() {
   }
   // Reset deltas to avoid a spike on capture start
   std::lock_guard lock(state_mutex_);
-  mouse_dx_ = 0.0f;
-  mouse_dy_ = 0.0f;
+  mouse_dx_ = 0.0;
+  mouse_dy_ = 0.0;
+  last_decay_time_ = std::chrono::steady_clock::now();
 }
 
 void MnkInputDriver::ReleaseMouseCaptureFromUIThread(rex::ui::Window* window) {
@@ -498,6 +495,23 @@ void MnkInputDriver::RecenterCursorFromUIThread(int32_t x, int32_t y) {
     prev_mouse_x_ = center_x;
     prev_mouse_y_ = center_y;
   }
+}
+
+void MnkInputDriver::DecayMouseAccumulator() {
+  auto now = std::chrono::steady_clock::now();
+  double dt_s = std::chrono::duration<double>(now - last_decay_time_).count();
+  last_decay_time_ = now;
+  if (dt_s <= 0.0) {
+    return;
+  }
+  // Half-life of the synthetic stick's "hold" after mouse motion stops. Long
+  // enough to let a turn-rate ramp in the guest build up speed across a few
+  // frames, short enough that the camera still stops turning promptly once
+  // the mouse stops moving.
+  constexpr double kHoldHalfLifeSeconds = 0.05;
+  double decay = std::pow(0.5, dt_s / kHoldHalfLifeSeconds);
+  mouse_dx_ *= decay;
+  mouse_dy_ *= decay;
 }
 
 void MnkInputDriver::SetKeyState(uint16_t vk, bool down) {
@@ -567,13 +581,14 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
   int32_t y = e.y();
   {
     std::lock_guard lock(state_mutex_);
+    DecayMouseAccumulator();
     if (relative_mouse_mode_) {
       // The pointer is locked, so the absolute position no longer moves.
       mouse_dx_ += e.dx();
       mouse_dy_ += e.dy();
     } else {
-      mouse_dx_ += float(x - prev_mouse_x_);
-      mouse_dy_ += float(y - prev_mouse_y_);
+      mouse_dx_ += double(x - prev_mouse_x_);
+      mouse_dy_ += double(y - prev_mouse_y_);
     }
   }
   prev_mouse_x_ = x;
