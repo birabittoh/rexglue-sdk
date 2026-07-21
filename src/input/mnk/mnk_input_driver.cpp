@@ -199,28 +199,8 @@ X_RESULT MnkInputDriver::GetState(uint32_t user_index, X_INPUT_STATE* out_state)
     return static_cast<int16_t>(std::clamp(v, (int32_t)INT16_MIN, (int32_t)INT16_MAX));
   };
 
-  // Coalesce polls landing within the same frame (see last_drain_time_'s
-  // comment in the header) so the guest and the gamepad-UI overlay's own
-  // per-frame poll don't race to drain mouse_dx_/mouse_dy_ out from under
-  // each other.
-  constexpr auto kDrainCoalesceWindow = std::chrono::milliseconds(4);
-  auto now = std::chrono::steady_clock::now();
   int16_t rx, ry;
-  if (have_cached_stick_ && (now - last_drain_time_) < kDrainCoalesceWindow) {
-    rx = cached_rx_;
-    ry = cached_ry_;
-  } else {
-    DecayMouseAccumulator();
-
-    double sensitivity = REXCVAR_GET(mnk_sensitivity);
-    constexpr double kBaseScale = 200.0;
-    rx = clamp16(static_cast<int32_t>(mouse_dx_ * sensitivity * kBaseScale));
-    ry = clamp16(static_cast<int32_t>(-mouse_dy_ * sensitivity * kBaseScale));
-    cached_rx_ = rx;
-    cached_ry_ = ry;
-    have_cached_stick_ = true;
-    last_drain_time_ = now;
-  }
+  ComputeLookStick(rx, ry);
 
   packet_number_++;
 
@@ -375,6 +355,52 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
   DecayMouseAccumulator();
   mouse_dx_ += e.rel_x();
   mouse_dy_ += e.rel_y();
+}
+
+void MnkInputDriver::ComputeLookStick(int16_t& out_rx, int16_t& out_ry) {
+  auto clamp16 = [](int32_t v) -> int16_t {
+    return static_cast<int16_t>(std::clamp(v, (int32_t)INT16_MIN, (int32_t)INT16_MAX));
+  };
+
+  // Coalesce polls landing within the same frame (see last_drain_time_'s
+  // comment in the header) so multiple callers within the same frame (the
+  // guest's own poll, this accessor, the gamepad-UI overlay's poll) don't
+  // race to drain mouse_dx_/mouse_dy_ out from under each other.
+  constexpr auto kDrainCoalesceWindow = std::chrono::milliseconds(4);
+  auto now = std::chrono::steady_clock::now();
+  if (have_cached_stick_ && (now - last_drain_time_) < kDrainCoalesceWindow) {
+    out_rx = cached_rx_;
+    out_ry = cached_ry_;
+    return;
+  }
+
+  DecayMouseAccumulator();
+
+  double sensitivity = REXCVAR_GET(mnk_sensitivity);
+  constexpr double kBaseScale = 200.0;
+  out_rx = clamp16(static_cast<int32_t>(mouse_dx_ * sensitivity * kBaseScale));
+  out_ry = clamp16(static_cast<int32_t>(-mouse_dy_ * sensitivity * kBaseScale));
+  cached_rx_ = out_rx;
+  cached_ry_ = out_ry;
+  have_cached_stick_ = true;
+  last_drain_time_ = now;
+}
+
+bool MnkInputDriver::TryGetLookStick(int16_t* out_rx, int16_t* out_ry) {
+  if (!IsEnabled() || !has_focus_) {
+    return false;
+  }
+  std::lock_guard lock(state_mutex_);
+  if (!mouse_captured_) {
+    return false;
+  }
+  int16_t rx, ry;
+  ComputeLookStick(rx, ry);
+  if (out_rx)
+    *out_rx = rx;
+  if (out_ry)
+    *out_ry = ry;
+  return true;
 }
 
 void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {

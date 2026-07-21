@@ -53,7 +53,28 @@ class MnkInputDriver final : public InputDriver,
   void OnLostFocus(rex::ui::UISetupEvent& e) override;
   void OnGotFocus(rex::ui::UISetupEvent& e) override;
 
+  // Returns the same decayed/coalesced virtual-stick value GetState() would
+  // report, without the X_INPUT_STATE/XInput-polling round trip. Intended
+  // for game-specific hooks that write straight into a guest struct.
+  //
+  // This intentionally reuses GetState()'s "held stick" decay rather than
+  // draining to a raw single-frame delta: guest camera code commonly ramps
+  // turn rate up over sustained stick deflection (see
+  // CONTROLLER_ACCELERATIONMOD_X/Y-style cvars in the guest's own input
+  // config), and a single spike-then-zero frame never lets that ramp build
+  // up, capping turn speed at the ramp's slowest tier regardless of mouse
+  // speed. Decaying keeps the reported stick "held" for a short tail after
+  // each flick, closer to how a physical stick behaves, so the guest's own
+  // acceleration curve sees sustained deflection. Returns false (out params
+  // untouched) if MnK mode is off, the window doesn't have focus, or the
+  // mouse isn't captured.
+  bool TryGetLookStick(int16_t* out_rx, int16_t* out_ry);
+
  private:
+  // Shared by GetState() and TryGetLookStick(). Must be called with
+  // state_mutex_ held.
+  void ComputeLookStick(int16_t& out_rx, int16_t& out_ry);
+
   uint32_t UserIndex() const;
   bool IsEnabled() const;
   void UpdateMouseCapture();
