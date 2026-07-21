@@ -21,10 +21,6 @@
 #include <cmath>
 #include <cstring>
 
-#if REX_PLATFORM_WIN32
-#include <Windows.h>
-#endif
-
 REXCVAR_DEFINE_BOOL(mnk_mode, false, "Input", "Enable keyboard/mouse controller emulation");
 REXCVAR_DEFINE_BOOL(mnk_capture_mouse, true, "Input",
                     "Capture and track the mouse cursor for look/aim in MnK mode");
@@ -214,12 +210,12 @@ X_RESULT MnkInputDriver::GetState(uint32_t user_index, X_INPUT_STATE* out_state)
     rx = cached_rx_;
     ry = cached_ry_;
   } else {
+    DecayMouseAccumulator();
+
     double sensitivity = REXCVAR_GET(mnk_sensitivity);
     constexpr double kBaseScale = 200.0;
     rx = clamp16(static_cast<int32_t>(mouse_dx_ * sensitivity * kBaseScale));
     ry = clamp16(static_cast<int32_t>(-mouse_dy_ * sensitivity * kBaseScale));
-    mouse_dx_ = 0;
-    mouse_dy_ = 0;
     cached_rx_ = rx;
     cached_ry_ = ry;
     have_cached_stick_ = true;
@@ -274,25 +270,6 @@ void MnkInputDriver::EnqueueKeystroke(uint16_t vk_pad, bool down) {
   keystroke_queue_.push(ks);
 }
 
-void MnkInputDriver::CenterCursor() {
-  if (!attached_window_)
-    return;
-  int32_t cx = static_cast<int32_t>(attached_window_->GetActualLogicalWidth() / 2);
-  int32_t cy = static_cast<int32_t>(attached_window_->GetActualLogicalHeight() / 2);
-  prev_mouse_x_ = cx;
-  prev_mouse_y_ = cy;
-#if REX_PLATFORM_WIN32
-  HWND hwnd = static_cast<HWND>(attached_window_->GetNativeWindowHandle());
-  if (hwnd) {
-    POINT pt = {static_cast<LONG>(cx), static_cast<LONG>(cy)};
-    ClientToScreen(hwnd, &pt);
-    SetCursorPos(pt.x, pt.y);
-  }
-#else
-  attached_window_->WarpMouseInWindow(cx, cy);
-#endif
-}
-
 void MnkInputDriver::UpdateMouseCapture() {
   if (!attached_window_)
     return;
@@ -304,18 +281,31 @@ void MnkInputDriver::UpdateMouseCapture() {
     attached_window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kHidden);
     attached_window_->CaptureMouse();
     // Reset deltas to avoid a spike on capture start
-    mouse_dx_ = 0;
-    mouse_dy_ = 0;
+    mouse_dx_ = 0.0;
+    mouse_dy_ = 0.0;
+    last_decay_time_ = std::chrono::steady_clock::now();
   } else if (!should_capture && mouse_captured_) {
     mouse_captured_ = false;
     attached_window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
     attached_window_->ReleaseMouse();
   }
+}
 
-  // Re-center cursor each frame while captured to prevent edge clamping
-  if (mouse_captured_) {
-    CenterCursor();
+void MnkInputDriver::DecayMouseAccumulator() {
+  auto now = std::chrono::steady_clock::now();
+  double dt_s = std::chrono::duration<double>(now - last_decay_time_).count();
+  last_decay_time_ = now;
+  if (dt_s <= 0.0) {
+    return;
   }
+  // Half-life of the synthetic stick's "hold" after mouse motion stops. Long
+  // enough to let a turn-rate ramp in the guest build up speed across a few
+  // frames, short enough that the camera still stops turning promptly once
+  // the mouse stops moving.
+  constexpr double kHoldHalfLifeSeconds = 0.05;
+  double decay = std::pow(0.5, dt_s / kHoldHalfLifeSeconds);
+  mouse_dx_ *= decay;
+  mouse_dy_ *= decay;
 }
 
 void MnkInputDriver::SetKeyState(uint16_t vk, bool down) {
@@ -382,12 +372,9 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
   if (!IsEnabled() || !has_focus_ || !REXCVAR_GET(mnk_capture_mouse))
     return;
   std::lock_guard lock(state_mutex_);
-  int32_t x = e.x();
-  int32_t y = e.y();
-  mouse_dx_ += x - prev_mouse_x_;
-  mouse_dy_ += y - prev_mouse_y_;
-  prev_mouse_x_ = x;
-  prev_mouse_y_ = y;
+  DecayMouseAccumulator();
+  mouse_dx_ += e.rel_x();
+  mouse_dy_ += e.rel_y();
 }
 
 void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
