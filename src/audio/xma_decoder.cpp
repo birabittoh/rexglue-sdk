@@ -28,6 +28,12 @@ extern "C" {
 
 REXCVAR_DEFINE_BOOL(ffmpeg_verbose, false, "Audio", "Verbose FFmpeg output (debug and above)");
 
+REXCVAR_DEFINE_BOOL(use_dedicated_xma_thread, true, "Audio",
+                    "Enables XMA decoding on a separate thread. Disabling makes the kicking "
+                    "thread decode inline, which avoids cross-thread wake latency and can "
+                    "fix audio hitching/freezing in some titles, at a small performance "
+                    "cost.");
+
 // As with normal Microsoft, there are like twelve different ways to access
 // the audio APIs. Early games use XMA*() methods almost exclusively to touch
 // decoders. Later games use XAudio*() and direct memory writes to the XMA
@@ -127,7 +133,9 @@ X_STATUS XmaDecoder::Setup(system::KernelState* kernel_state) {
   assert_not_null(work_event_);
   worker_thread_ = system::object_ref<system::XHostThread>(
       new system::XHostThread(kernel_state, 128 * 1024, 0, [this]() {
-        WorkerThreadMain();
+        if (REXCVAR_GET(use_dedicated_xma_thread)) {
+          WorkerThreadMain();
+        }
         return 0;
       }));
   worker_thread_->set_name("XMA Decoder");
@@ -286,20 +294,29 @@ void XmaDecoder::WriteRegister(uint32_t addr, uint32_t value) {
     // The context ID is a bit in the range of the entire context array.
     uint32_t base_context_id = (r - XmaRegister::Context0Kick) * 32;
     uint32_t kicked_value = value;
+    bool dedicated_thread = REXCVAR_GET(use_dedicated_xma_thread);
     for (int i = 0; value && i < 32; ++i, value >>= 1) {
       if (value & 1) {
         uint32_t context_id = base_context_id + i;
         auto& context = contexts_[context_id];
         context.Enable();
+        if (!dedicated_thread) {
+          // No worker thread running: decode inline on the kicking thread to
+          // avoid cross-thread wake-up latency (a source of audio hitching).
+          context.Work();
+        }
       }
     }
-    // Signal the decoder thread to start processing.
+    // Signal the decoder thread to start processing (no-op if there is no
+    // dedicated worker thread).
     work_event_->Set();
-    // Block until the worker finishes, so the game sees updated context data.
-    for (int i = 0; kicked_value && i < 32; ++i, kicked_value >>= 1) {
-      if (kicked_value & 1) {
-        uint32_t context_id = base_context_id + i;
-        contexts_[context_id].WaitForWorkDone();
+    if (dedicated_thread) {
+      // Block until the worker finishes, so the game sees updated context data.
+      for (int i = 0; kicked_value && i < 32; ++i, kicked_value >>= 1) {
+        if (kicked_value & 1) {
+          uint32_t context_id = base_context_id + i;
+          contexts_[context_id].WaitForWorkDone();
+        }
       }
     }
   } else if (r >= XmaRegister::Context0Lock && r <= XmaRegister::Context9Lock) {
@@ -356,6 +373,13 @@ void XmaDecoder::Pause() {
     return;
   }
   paused_ = true;
+
+  if (!REXCVAR_GET(use_dedicated_xma_thread)) {
+    // No worker thread running its pause/resume fence loop; nothing to wait
+    // on. Decoding simply happens inline on kicks, which callers naturally
+    // stop making while paused.
+    return;
+  }
 
   if (work_event_) {
     work_event_->Set();
