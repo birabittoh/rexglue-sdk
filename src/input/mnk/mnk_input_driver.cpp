@@ -462,6 +462,9 @@ void MnkInputDriver::ApplyMouseCaptureFromUIThread() {
   mouse_dx_ = 0.0;
   mouse_dy_ = 0.0;
   last_decay_time_ = std::chrono::steady_clock::now();
+  raw_delta_x_ = 0.0;
+  raw_delta_y_ = 0.0;
+  have_cached_raw_delta_ = false;
 }
 
 void MnkInputDriver::ReleaseMouseCaptureFromUIThread(rex::ui::Window* window) {
@@ -579,17 +582,22 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
     return;
   int32_t x = e.x();
   int32_t y = e.y();
+  int32_t dx, dy;
+  if (relative_mouse_mode_) {
+    // The pointer is locked, so the absolute position no longer moves.
+    dx = e.dx();
+    dy = e.dy();
+  } else {
+    dx = x - prev_mouse_x_;
+    dy = y - prev_mouse_y_;
+  }
   {
     std::lock_guard lock(state_mutex_);
     DecayMouseAccumulator();
-    if (relative_mouse_mode_) {
-      // The pointer is locked, so the absolute position no longer moves.
-      mouse_dx_ += e.dx();
-      mouse_dy_ += e.dy();
-    } else {
-      mouse_dx_ += double(x - prev_mouse_x_);
-      mouse_dy_ += double(y - prev_mouse_y_);
-    }
+    mouse_dx_ += dx;
+    mouse_dy_ += dy;
+    raw_delta_x_ += dx;
+    raw_delta_y_ += dy;
   }
   prev_mouse_x_ = x;
   prev_mouse_y_ = y;
@@ -597,6 +605,44 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
   if (mouse_captured_ && !relative_mouse_mode_) {
     RecenterCursorFromUIThread(x, y);
   }
+}
+
+bool MnkInputDriver::TryGetLookDelta(int32_t* out_dx, int32_t* out_dy) {
+  if (!IsEnabled() || !has_focus_) {
+    return false;
+  }
+  std::lock_guard lock(state_mutex_);
+  if (!mouse_captured_) {
+    return false;
+  }
+
+  // Coalesce polls landing within the same frame, same as GetState's
+  // cached_rx_/cached_ry_, so multiple callers within the window drain the
+  // accumulated delta exactly once instead of racing to split it.
+  constexpr auto kDrainCoalesceWindow = std::chrono::milliseconds(4);
+  auto now = std::chrono::steady_clock::now();
+  if (have_cached_raw_delta_ && (now - last_raw_drain_time_) < kDrainCoalesceWindow) {
+    if (out_dx)
+      *out_dx = cached_raw_dx_;
+    if (out_dy)
+      *out_dy = cached_raw_dy_;
+    return true;
+  }
+
+  int32_t dx = static_cast<int32_t>(raw_delta_x_);
+  int32_t dy = static_cast<int32_t>(raw_delta_y_);
+  raw_delta_x_ = 0.0;
+  raw_delta_y_ = 0.0;
+  cached_raw_dx_ = dx;
+  cached_raw_dy_ = dy;
+  have_cached_raw_delta_ = true;
+  last_raw_drain_time_ = now;
+
+  if (out_dx)
+    *out_dx = dx;
+  if (out_dy)
+    *out_dy = dy;
+  return true;
 }
 
 void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
@@ -607,8 +653,11 @@ void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
   {
     std::lock_guard lock(state_mutex_);
     std::memset(key_down_, 0, sizeof(key_down_));
-    mouse_dx_ = 0.0f;
-    mouse_dy_ = 0.0f;
+    mouse_dx_ = 0.0;
+    mouse_dy_ = 0.0;
+    raw_delta_x_ = 0.0;
+    raw_delta_y_ = 0.0;
+    have_cached_raw_delta_ = false;
   }
   if (attached_window_) {
     ReleaseMouseCaptureFromUIThread(attached_window_);
