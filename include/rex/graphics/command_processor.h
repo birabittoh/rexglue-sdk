@@ -322,6 +322,11 @@ class CommandProcessor {
     (void)config;
   }
 
+  // Captures the next full guest-rendered frame with RenderDoc, if attached.
+  // Default: no-op. Backends with a RenderDoc integration (currently D3D12
+  // only) override this.
+  virtual void RequestRenderDocCapture() {}
+
   void InitializeRingBuffer(uint32_t ptr, uint32_t size_log2);
   void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2);
 
