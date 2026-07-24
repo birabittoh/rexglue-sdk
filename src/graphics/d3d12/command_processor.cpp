@@ -216,6 +216,14 @@ void D3D12CommandProcessor::InitializeAssetReplacement(
   }
 }
 
+void D3D12CommandProcessor::RequestRenderDocCapture() {
+  const ui::RenderDocAPI* renderdoc_api = GetD3D12Provider().GetRenderDocAPI();
+  if (renderdoc_api == nullptr) {
+    return;
+  }
+  renderdoc_capture_requested_.store(true, std::memory_order_relaxed);
+}
+
 bool D3D12CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* reader,
                                                                uint32_t packet, uint32_t count) {
   if (!REXCVAR_GET(occlusion_query_enable) || !occlusion_query_resources_available_) {
@@ -1701,6 +1709,8 @@ bool D3D12CommandProcessor::SetupContext() {
                                             uint32_t(SystemBindlessView::kGammaRampPWLSRV)));
   }
 
+  renderdoc_capture_requested_.store(false, std::memory_order_relaxed);
+  renderdoc_capturing_ = false;
   occlusion_query_resources_available_ = InitializeOcclusionQueryResources();
 
   // Just not to expose uninitialized memory.
@@ -3478,6 +3488,16 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
     EvictOldReadbackBuffers(readback_buffers_);
     EvictOldReadbackBuffers(memexport_readback_buffers_);
 
+    renderdoc_capturing_ = renderdoc_capture_requested_.exchange(false, std::memory_order_relaxed);
+    if (renderdoc_capturing_) {
+      const ui::RenderDocAPI* renderdoc_api = GetD3D12Provider().GetRenderDocAPI();
+      if (renderdoc_api != nullptr) {
+        renderdoc_api->api_1_0_0()->StartFrameCapture(nullptr, nullptr);
+      } else {
+        renderdoc_capturing_ = false;
+      }
+    }
+
     primitive_processor_->BeginFrame();
 
     texture_cache_->BeginFrame();
@@ -3573,6 +3593,14 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
   if (is_closing_frame) {
     if (REXCVAR_GET(clear_memory_page_state) && shared_memory_) {
       shared_memory_->SetSystemPageBlocksValidWithGpuDataWritten();
+    }
+    // Close the capture after submitting.
+    if (renderdoc_capturing_) {
+      const ui::RenderDocAPI* renderdoc_api = provider.GetRenderDocAPI();
+      if (renderdoc_api != nullptr) {
+        renderdoc_api->api_1_0_0()->EndFrameCapture(nullptr, nullptr);
+      }
+      renderdoc_capturing_ = false;
     }
     frame_open_ = false;
     // Submission already closed now, so minus 1.
