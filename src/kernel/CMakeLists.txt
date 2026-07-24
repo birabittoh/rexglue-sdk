@@ -68,3 +68,13 @@ list(TRANSFORM REXKERNEL_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 target_sources(rexruntime PRIVATE ${REXKERNEL_SOURCES})
 
 target_link_libraries(rexruntime PRIVATE o1heap rexcore rexfilesystem rexui rexaudio rexinput imgui)
+
+# rexui is an OBJECT library linked PRIVATE above, so its own PUBLIC
+# dependency on renderdoc (src/ui/CMakeLists.txt) stops at rexruntime's
+# boundary: the object files land in rexruntime.dll, but renderdoc's
+# INTERFACE_INCLUDE_DIRECTORIES (include/renderdoc, holding renderdoc_app.h)
+# never reaches rex::runtime's exported interface. rexruntime's own public
+# headers (rex/ui/vulkan/*.h) include <renderdoc_app.h> unconditionally, so
+# consumers linking only rex::runtime need that include dir surfaced
+# explicitly, not inherited through the private object-library link.
+target_link_libraries(rexruntime PUBLIC renderdoc)

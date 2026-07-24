@@ -58,6 +58,10 @@ class D3D12CommandProcessor : public CommandProcessor {
 
   void InitializeAssetReplacement(const system::AssetReplacementConfig& config) override;
 
+  // Captures the next full guest-rendered frame with RenderDoc, if attached.
+  // No-op if RenderDoc isn't connected to this process.
+  void RequestRenderDocCapture() override;
+
   // Shader debugger UI hooks.
   std::vector<ShaderInfo> GetShaderSnapshot() const override;
   void SetShaderDisabledByHash(uint64_t ucode_hash, bool disabled) override;
@@ -679,6 +683,9 @@ class D3D12CommandProcessor : public CommandProcessor {
   };
   std::array<VertexBufferState, 96> vertex_buffer_states_{};
   uint64_t vertex_buffers_in_sync_[2] = {};
+
+  std::atomic<bool> renderdoc_capture_requested_ = false;
+  bool renderdoc_capturing_ = false;
 
   // The current fixed-function drawing state.
   D3D12_VIEWPORT ff_viewport_;
