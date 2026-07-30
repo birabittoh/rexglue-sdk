@@ -34,6 +34,11 @@ bool g_finalized = false;
 bool g_lifecycle_override = false;
 std::mutex g_mutex;
 
+// Defined below; forward-declared so ApplyTomlTable (defined before it in
+// this file) can call it.
+bool SetFlagByNameImpl(std::string_view name, std::string_view value, bool persist,
+                       bool mark_restart);
+
 // Set once cvar::Init has parsed the command line; later registrations are
 // from runtime-loaded modules and drain pending values.
 std::atomic<bool> g_init_done = false;
@@ -113,7 +118,10 @@ void ApplyTomlTable(const toml::table& table, const std::string& prefix) {
         std::lock_guard lock(GetRegistryMutex());
         GetPendingValuesStorage()[full_key].config = value_str;
         REXLOG_DEBUG("Config: '{}' deferred (cvar not yet registered)", full_key);
-      } else if (SetFlagByName(full_key, value_str, /*persist=*/true)) {
+        // Loading a config file establishes the process's initial values, not
+        // a pending runtime change -- don't mark restart-required cvars as
+        // needing a restart just because a config load set their value.
+      } else if (SetFlagByNameImpl(full_key, value_str, /*persist=*/true, /*mark_restart=*/false)) {
         REXLOG_DEBUG("Config: {} = {}", full_key, value_str);
       } else {
         REXLOG_WARN("Config: invalid value for cvar '{}'", full_key);
@@ -333,7 +341,15 @@ void FlagRegistrar::apply_(std::function<void(FlagEntry&)> fn) {
   fn(GetRegistryStorage()[it->second]);
 }
 
-bool SetFlagByName(std::string_view name, std::string_view value, bool persist) {
+namespace {
+
+// `mark_restart` is false for values applied while establishing the
+// process's initial state (LoadConfig): those aren't a pending action for
+// the user to act on, just the boot-time value taking effect. It's true for
+// every other caller (SetFlagByName's public API), i.e. actual runtime
+// changes -- from the settings UI, console, mods, etc.
+bool SetFlagByNameImpl(std::string_view name, std::string_view value, bool persist,
+                       bool mark_restart) {
   std::lock_guard lock(GetRegistryMutex());
   auto it = GetRegistryIndex().find(std::string(name));
   if (it == GetRegistryIndex().end()) {
@@ -360,7 +376,7 @@ bool SetFlagByName(std::string_view name, std::string_view value, bool persist) 
   }
 
   // Track pending restart flags
-  if (success && entry.lifecycle == Lifecycle::kRequiresRestart) {
+  if (success && mark_restart && entry.lifecycle == Lifecycle::kRequiresRestart) {
     MarkPendingRestart(name);
   }
 
@@ -376,6 +392,12 @@ bool SetFlagByName(std::string_view name, std::string_view value, bool persist) 
   }
 
   return success;
+}
+
+}  // namespace
+
+bool SetFlagByName(std::string_view name, std::string_view value, bool persist) {
+  return SetFlagByNameImpl(name, value, persist, /*mark_restart=*/true);
 }
 
 bool InvokeCommand(std::string_view name, std::string_view args) {
