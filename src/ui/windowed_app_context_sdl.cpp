@@ -38,10 +38,9 @@ bool SDLWindowedAppContext::Initialize() {
 #if REX_PLATFORM_MAC
   // macOS presents via a CAMetalLayer surface obtained from the Cocoa driver.
   SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "cocoa");
-#elif !REX_PLATFORM_WIN32
-  // The Surface types the presenters consume are Win32Hwnd and XcbWindow;
-  // force X11 so an xcb connection is retrievable (there is no Wayland
-  // surface type).
+#elif !REX_PLATFORM_WIN32 && !defined(VK_USE_PLATFORM_WAYLAND_KHR)
+  // The Surface types the presenters consume without Wayland are Win32Hwnd
+  // and XcbWindow; force X11 so an xcb connection is retrievable.
   SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11");
 #endif
   if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {

@@ -31,6 +31,7 @@ class Surface {
     kTypeIndex_AndroidNativeWindow,
     // GNU/Linux.
     kTypeIndex_XcbWindow,
+    kTypeIndex_WaylandSurface,
     // Windows.
     kTypeIndex_Win32Hwnd,
     // macOS — CAMetalLayer presented via MoltenVK (VK_EXT_metal_surface).
@@ -40,6 +41,7 @@ class Surface {
   enum : TypeFlags {
     kTypeFlag_AndroidNativeWindow = TypeFlags(1) << kTypeIndex_AndroidNativeWindow,
     kTypeFlag_XcbWindow = TypeFlags(1) << kTypeIndex_XcbWindow,
+    kTypeFlag_WaylandSurface = TypeFlags(1) << kTypeIndex_WaylandSurface,
     kTypeFlag_Win32Hwnd = TypeFlags(1) << kTypeIndex_Win32Hwnd,
     kTypeFlag_CAMetalLayer = TypeFlags(1) << kTypeIndex_CAMetalLayer,
   };
