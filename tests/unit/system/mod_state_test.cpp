@@ -247,6 +247,33 @@ TEST_CASE("ModState: Validate reports a conflict for both sides regardless of or
   CHECK(issues[1].kind == ModIssue::Kind::kError);
 }
 
+TEST_CASE("ModState: RemoveMod deletes the folder and drops the mods.toml entry", "[mod_state]") {
+  TempDirectory temp("rex_mod_state_remove");
+  std::filesystem::create_directories(temp.path() / "keep_me");
+  std::filesystem::create_directories(temp.path() / "bye_mod");
+  ModState::Save(temp.path(), {{"keep_me", true}, {"bye_mod", true}});
+
+  CHECK(ModState::RemoveMod(temp.path(), "bye_mod"));
+  CHECK_FALSE(std::filesystem::exists(temp.path() / "bye_mod"));
+  CHECK(std::filesystem::exists(temp.path() / "keep_me"));
+
+  auto entries = ModState::Load(temp.path());
+  REQUIRE(entries.size() == 1);
+  CHECK(entries[0].id == "keep_me");
+}
+
+TEST_CASE("ModState: RemoveMod rejects a path-traversal id without touching anything",
+          "[mod_state]") {
+  TempDirectory temp("rex_mod_state_remove_traversal");
+  std::filesystem::create_directories(temp.path() / "keep_me");
+  ModState::Save(temp.path(), {{"keep_me", true}});
+
+  CHECK_FALSE(ModState::RemoveMod(temp.path(), "../keep_me"));
+  CHECK_FALSE(ModState::RemoveMod(temp.path(), ".."));
+  CHECK(std::filesystem::exists(temp.path() / "keep_me"));
+  CHECK(ModState::Load(temp.path()).size() == 1);
+}
+
 TEST_CASE("ModState: InstallLocalArchive sideloads a zip with a single top-level directory",
           "[mod_state]") {
   TempDirectory temp("rex_mod_state_sideload_prefixed");
