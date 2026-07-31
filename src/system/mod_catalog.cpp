@@ -17,6 +17,7 @@
 
 #include <nlohmann/json.hpp>
 #include <picosha2.h>
+#include <toml++/toml.hpp>
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
@@ -24,6 +25,7 @@
 #include <rex/net/http.h>
 #include <rex/runtime.h>
 #include <rex/system/mod_state.h>
+#include <rex/system/mod_version.h>
 
 REXCVAR_DEFINE_STRING(mod_catalog_project, "goopie-f3ef6", "Mods",
                       "Firestore project id serving the mod catalog (blank + mod_catalog_url "
@@ -120,6 +122,23 @@ std::string ModsForGameQueryBody(std::string_view collection, std::string_view g
   query["structuredQuery"]["where"]["compositeFilter"]["filters"] =
       json::array({game_filter, status_filter});
   return query.dump();
+}
+
+// Best-effort read of an installed mod's `version` key, for comparing
+// against a `requires` entry's minimum-version pin; empty on any failure
+// (not installed, missing/malformed mod.toml, no version key). Mirrors
+// ModState's own tolerance for an optional/missing manifest.
+std::string ReadInstalledModVersion(const std::filesystem::path& mods_root, const std::string& id) {
+  auto manifest_path = mods_root / id / "mod.toml";
+  if (!std::filesystem::is_regular_file(manifest_path)) {
+    return {};
+  }
+  try {
+    auto table = toml::parse_file(manifest_path.string());
+    return table["version"].value_or<std::string>("");
+  } catch (const toml::parse_error&) {
+    return {};
+  }
 }
 
 }  // namespace
@@ -316,20 +335,13 @@ void ModCatalog::InstallAsync(const CatalogMod& entry, const std::filesystem::pa
   });
 }
 
-void ModCatalog::InstallWorker(CatalogMod entry, std::filesystem::path mods_root) {
-  auto fail = [this](std::string message) {
-    std::lock_guard<std::mutex> lock(install_mutex_);
-    install_result_.in_progress = false;
-    install_result_.done = true;
-    install_result_.ok = false;
-    install_result_.message = std::move(message);
-  };
-
+bool ModCatalog::InstallOneMod(const CatalogMod& entry, const std::filesystem::path& mods_root,
+                               std::string& out_error) {
   std::error_code ec;
   std::filesystem::create_directories(mods_root, ec);
   if (ec) {
-    fail("failed to create mods folder: " + ec.message());
-    return;
+    out_error = "failed to create mods folder: " + ec.message();
+    return false;
   }
 
   auto temp_zip = mods_root / (".catalog-download-" + entry.mod_id + ".zip.tmp");
@@ -341,8 +353,8 @@ void ModCatalog::InstallWorker(CatalogMod entry, std::filesystem::path mods_root
   };
   if (!rex::net::HttpDownloadToFile(entry.asset_url, temp_zip, progress, download_error)) {
     std::filesystem::remove(temp_zip, ec);
-    fail("download failed: " + download_error);
-    return;
+    out_error = "download failed: " + download_error;
+    return false;
   }
 
   // Checksum verification: hard-refuse on mismatch, never extract.
@@ -358,10 +370,10 @@ void ModCatalog::InstallWorker(CatalogMod entry, std::filesystem::path mods_root
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (actual != expected_lower) {
       std::filesystem::remove(temp_zip, ec);
-      fail("checksum mismatch: expected " + entry.checksum + ", got " + actual +
-           " -- the release asset may have changed since this mod was approved. Refusing to "
-           "install.");
-      return;
+      out_error = "checksum mismatch: expected " + entry.checksum + ", got " + actual +
+                  " -- the release asset may have changed since this mod was approved. Refusing "
+                  "to install.";
+      return false;
     }
   }
 
@@ -371,8 +383,8 @@ void ModCatalog::InstallWorker(CatalogMod entry, std::filesystem::path mods_root
   if (!rex::filesystem::ExtractZip(temp_zip, staging, extract_error)) {
     std::filesystem::remove(temp_zip, ec);
     std::filesystem::remove_all(staging, ec);
-    fail("extract failed: " + extract_error);
-    return;
+    out_error = "extract failed: " + extract_error;
+    return false;
   }
   std::filesystem::remove(temp_zip, ec);
 
@@ -402,8 +414,8 @@ void ModCatalog::InstallWorker(CatalogMod entry, std::filesystem::path mods_root
                           ec);
     if (ec) {
       std::filesystem::remove_all(staging, ec);
-      fail("failed to install extracted mod: " + ec.message());
-      return;
+      out_error = "failed to install extracted mod: " + ec.message();
+      return false;
     }
   }
   std::filesystem::remove_all(staging, ec);
@@ -414,14 +426,86 @@ void ModCatalog::InstallWorker(CatalogMod entry, std::filesystem::path mods_root
     entries.push_back(ModStateEntry{entry.mod_id, true});
   }
   ModState::Save(mods_root, entries);
+  return true;
+}
 
+void ModCatalog::InstallWorker(CatalogMod entry, std::filesystem::path mods_root) {
+  auto fail = [this](std::string message) {
+    std::lock_guard<std::mutex> lock(install_mutex_);
+    install_result_.in_progress = false;
+    install_result_.done = true;
+    install_result_.ok = false;
+    install_result_.message = std::move(message);
+  };
+
+  // Pull in the latest published version of each unmet `requires` dependency
+  // first, mirroring the companion desktop launcher's install flow (see
+  // GameMods.tsx's handleInstall) -- a player shouldn't have to hunt down and
+  // install a mod's dependencies by hand. Only one level deep (a
+  // dependency's own dependencies aren't resolved), matching the launcher.
+  // Already-installed dependencies are skipped unless the requirement pins a
+  // minimum version the installed copy doesn't meet.
+  std::vector<std::string> installed_deps;
+  {
+    auto catalog_snapshot = Snapshot();
+    auto find_catalog_entry = [&](const std::string& id) -> const CatalogMod* {
+      for (const auto& mod : catalog_snapshot) {
+        if (mod.mod_id == id) {
+          return &mod;
+        }
+      }
+      return nullptr;
+    };
+
+    auto installed_entries = ModState::LoadReconciled(mods_root);
+    std::unordered_map<std::string, std::string> installed_versions;
+    for (const auto& installed_entry : installed_entries) {
+      installed_versions.emplace(installed_entry.id,
+                                 ReadInstalledModVersion(mods_root, installed_entry.id));
+    }
+
+    for (const auto& req_string : entry.requires_mods) {
+      ModRequirement req = ParseRequirement(req_string);
+      if (req.name.empty() || req.name == entry.mod_id) {
+        continue;
+      }
+      auto installed_it = installed_versions.find(req.name);
+      if (installed_it != installed_versions.end() &&
+          (req.min_version.empty() ||
+           CompareVersionStrings(installed_it->second, req.min_version) >= 0)) {
+        continue;  // already installed and satisfies the pin (if any)
+      }
+      const CatalogMod* req_mod = find_catalog_entry(req.name);
+      if (!req_mod || req_mod->asset_url.empty()) {
+        continue;  // nothing we can auto-install for this requirement
+      }
+      std::string dep_error;
+      if (!InstallOneMod(*req_mod, mods_root, dep_error)) {
+        fail("failed to install dependency \"" + req.name + "\": " + dep_error);
+        return;
+      }
+      installed_deps.push_back(req.name);
+    }
+  }
+
+  std::string error;
+  if (!InstallOneMod(entry, mods_root, error)) {
+    fail(std::move(error));
+    return;
+  }
+
+  std::string message = "Installed \"" + entry.mod_id + "\"" +
+                        (entry.version.empty() ? "" : " (v" + entry.version + ")");
+  if (!installed_deps.empty()) {
+    message += " (+" + std::to_string(installed_deps.size()) +
+               (installed_deps.size() == 1 ? " dependency" : " dependencies") + ")";
+  }
   {
     std::lock_guard<std::mutex> lock(install_mutex_);
     install_result_.in_progress = false;
     install_result_.done = true;
     install_result_.ok = true;
-    install_result_.message = "Installed \"" + entry.mod_id + "\"" +
-                              (entry.version.empty() ? "" : " (v" + entry.version + ")");
+    install_result_.message = std::move(message);
   }
 }
 
