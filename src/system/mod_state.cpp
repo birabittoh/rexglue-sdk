@@ -22,6 +22,7 @@
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
+#include <rex/platform/process.h>
 #include <rex/runtime.h>  // REXCVAR_DECLARE(mods_data_root)
 #include <rex/system/mod_version.h>
 
@@ -182,6 +183,41 @@ bool ModState::RemoveMod(const std::filesystem::path& root, const std::string& i
   return Save(root, entries);
 }
 
+bool ModState::MarkPendingRemoval(const std::filesystem::path& root, const std::string& id) {
+  if (id.empty() || id == "." || id == ".." || id.find('/') != std::string::npos ||
+      id.find('\\') != std::string::npos) {
+    return false;
+  }
+  auto pending_root = PendingRemovalsRoot(root);
+  std::error_code ec;
+  std::filesystem::create_directories(pending_root, ec);
+  if (ec) {
+    REXSYS_ERROR("Failed to create pending-removals folder: {}", ec.message());
+    return false;
+  }
+  std::ofstream marker(pending_root / id, std::ios::binary);
+  return static_cast<bool>(marker);
+}
+
+bool ModState::UnmarkPendingRemoval(const std::filesystem::path& root, const std::string& id) {
+  std::error_code ec;
+  std::filesystem::remove(PendingRemovalsRoot(root) / id, ec);
+  return !ec;
+}
+
+std::unordered_set<std::string> ModState::PendingRemovals(const std::filesystem::path& root) {
+  std::unordered_set<std::string> ids;
+  std::error_code ec;
+  auto pending_root = PendingRemovalsRoot(root);
+  if (!std::filesystem::is_directory(pending_root, ec)) {
+    return ids;
+  }
+  for (auto& entry : std::filesystem::directory_iterator(pending_root, ec)) {
+    ids.insert(entry.path().filename().string());
+  }
+  return ids;
+}
+
 std::vector<std::string> ModState::InstalledIds(const std::filesystem::path& root) {
   std::vector<std::string> ids;
   std::error_code ec;
@@ -189,9 +225,24 @@ std::vector<std::string> ModState::InstalledIds(const std::filesystem::path& roo
     return ids;
   }
   for (auto& entry : std::filesystem::directory_iterator(root, ec)) {
-    if (entry.is_directory()) {
-      ids.push_back(entry.path().filename().string());
+    if (!entry.is_directory()) {
+      continue;
     }
+    std::string name = entry.path().filename().string();
+    // Every in-progress install/update writes its scratch state as a
+    // dot-prefixed subfolder directly under root (.pending-updates,
+    // .pending-removals, .sideload-staging-<name>, .catalog-staging-<id>)
+    // precisely so it's never mistaken for an installed mod -- skip them all
+    // here rather than naming each one, so a new staging convention added
+    // later doesn't need a matching change here. A mod marked for removal
+    // (MarkPendingRemoval) deliberately isn't filtered by anything here: its
+    // folder and mods.toml entry are both left untouched until the next
+    // launch's ApplyPendingRemovals, so it should keep showing up exactly
+    // like any other installed mod until then.
+    if (!name.empty() && name.front() == '.') {
+      continue;
+    }
+    ids.push_back(name);
   }
   std::sort(ids.begin(), ids.end());
   return ids;
@@ -378,7 +429,7 @@ std::vector<ModIssue> ModState::Validate(const std::vector<ModStateEntry>& entri
       }
       if (it->second > i) {
         err(id, "\"" + req.name + "\" must load before \"" + id +
-                    "\". Click Auto-sort, or drag it higher.");
+                    "\". Click Auto-sort, or move it higher.");
         continue;
       }
       if (req.min_version.empty()) {
@@ -534,26 +585,33 @@ std::optional<ModInstallResult> ModState::InstallLocalArchive(const std::filesys
               (new_version.empty() ? "?" : new_version) + ")";
       return std::nullopt;
     }
-    std::filesystem::remove_all(dest, ec);
   }
 
-  std::filesystem::rename(content_root, dest, ec);
-  if (ec) {
-    // Cross-filesystem rename can fail; fall back to a recursive copy.
-    ec.clear();
-    std::filesystem::create_directories(dest, ec);
-    std::filesystem::copy(content_root, dest,
-                          std::filesystem::copy_options::recursive |
-                              std::filesystem::copy_options::overwrite_existing,
-                          ec);
+  // Clear out the old install first, same as always -- but if that fails,
+  // `dest` has a file Windows won't let go of (most likely a mod DLL this
+  // very process still has mapped/open), so there's no way to replace it in
+  // place. Stage the new content instead; ApplyPendingUpdates swaps it onto
+  // `dest` at the next launch, before anything has a chance to open it.
+  bool staged = false;
+  if (updated) {
+    std::filesystem::remove_all(dest, ec);
     if (ec) {
-      std::filesystem::remove_all(staging, ec);
-      error = "failed to install extracted mod: " + ec.message();
-      return std::nullopt;
+      if (!StagePendingUpdate(root, derived_id, content_root, error)) {
+        std::filesystem::remove_all(staging, ec);
+        return std::nullopt;
+      }
+      staged = true;
     }
+  }
+  if (!staged && !rex::filesystem::MoveOrCopyDirectory(content_root, dest, error)) {
+    std::filesystem::remove_all(staging, ec);
+    return std::nullopt;
   }
   std::filesystem::remove_all(staging, ec);
 
+  // A staged update hasn't touched mods.toml's on-disk folder yet, but the
+  // entry itself (id/enabled/order) is unaffected either way, so this is safe
+  // to record now regardless of `staged`.
   auto entries = LoadReconciled(root);
   if (std::none_of(entries.begin(), entries.end(),
                    [&](const ModStateEntry& e) { return e.id == derived_id; })) {
@@ -561,7 +619,136 @@ std::optional<ModInstallResult> ModState::InstallLocalArchive(const std::filesys
   }
   Save(root, entries);
 
-  return ModInstallResult{derived_id, new_version, updated};
+  return ModInstallResult{derived_id, new_version, updated, staged};
+}
+
+std::filesystem::path ModState::PendingUpdatesRoot(const std::filesystem::path& root) {
+  return root / ".pending-updates";
+}
+
+bool ModState::HasPendingUpdates(const std::filesystem::path& root) {
+  std::error_code ec;
+  auto pending_root = PendingUpdatesRoot(root);
+  if (!std::filesystem::is_directory(pending_root, ec)) {
+    return false;
+  }
+  for (auto& entry : std::filesystem::directory_iterator(pending_root, ec)) {
+    if (entry.is_directory()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ModState::StagePendingUpdate(const std::filesystem::path& root, const std::string& id,
+                                  const std::filesystem::path& content_root, std::string& error) {
+  auto pending_root = PendingUpdatesRoot(root);
+  std::error_code ec;
+  std::filesystem::create_directories(pending_root, ec);
+  if (ec) {
+    error = "failed to create pending-updates folder: " + ec.message();
+    return false;
+  }
+  auto staged_dest = pending_root / id;
+  std::filesystem::remove_all(staged_dest, ec);
+  return rex::filesystem::MoveOrCopyDirectory(content_root, staged_dest, error);
+}
+
+void ModState::ApplyPendingUpdates(const std::filesystem::path& root) {
+  // If this process was just relaunched (see ModManagerDialog's "Restart &
+  // Apply"), the old instance may still be shutting down and, until
+  // it fully exits, may still hold the very files a staged update needs to
+  // replace (a loaded mod DLL). Give it a bounded window to finish first --
+  // without this, applying tends to lose the same race the live in-place
+  // update did, silently leaving the update staged again. Unconditional (and
+  // cheap/no-op when this wasn't a relaunch) so the wait always happens
+  // regardless of whether an update happens to be staged.
+  rex::platform::process::WaitForPreviousInstanceExit();
+
+  auto pending_root = PendingUpdatesRoot(root);
+  std::error_code ec;
+  if (!std::filesystem::is_directory(pending_root, ec)) {
+    return;
+  }
+
+  std::vector<std::filesystem::path> staged_dirs;
+  for (auto& entry : std::filesystem::directory_iterator(pending_root, ec)) {
+    if (entry.is_directory()) {
+      staged_dirs.push_back(entry.path());
+    }
+  }
+
+  for (auto& staged_dir : staged_dirs) {
+    std::string id = staged_dir.filename().string();
+    auto dest = root / id;
+    std::filesystem::remove_all(dest, ec);
+    std::string move_error;
+    if (!rex::filesystem::MoveOrCopyDirectory(staged_dir, dest, move_error)) {
+      REXSYS_WARN("Failed to apply pending update for mod '{}': {} (will retry next launch)", id,
+                  move_error);
+    }
+  }
+}
+
+std::filesystem::path ModState::PendingRemovalsRoot(const std::filesystem::path& root) {
+  return root / ".pending-removals";
+}
+
+bool ModState::HasPendingRemovals(const std::filesystem::path& root) {
+  std::error_code ec;
+  auto pending_root = PendingRemovalsRoot(root);
+  if (!std::filesystem::is_directory(pending_root, ec)) {
+    return false;
+  }
+  for (auto& entry : std::filesystem::directory_iterator(pending_root, ec)) {
+    (void)entry;
+    return true;
+  }
+  return false;
+}
+
+void ModState::ApplyPendingRemovals(const std::filesystem::path& root) {
+  // Same reasoning as ApplyPendingUpdates: a relaunched instance may still
+  // need to wait for the old one to actually let go of a locked mod folder.
+  rex::platform::process::WaitForPreviousInstanceExit();
+
+  auto pending_root = PendingRemovalsRoot(root);
+  std::error_code ec;
+  if (!std::filesystem::is_directory(pending_root, ec)) {
+    return;
+  }
+
+  std::vector<std::filesystem::path> markers;
+  for (auto& entry : std::filesystem::directory_iterator(pending_root, ec)) {
+    markers.push_back(entry.path());
+  }
+
+  std::vector<std::string> removed_ids;
+  for (auto& marker : markers) {
+    std::string id = marker.filename().string();
+    std::filesystem::remove_all(root / id, ec);
+    if (ec) {
+      REXSYS_WARN("Failed to apply pending removal for mod '{}': {} (will retry next launch)", id,
+                  ec.message());
+      continue;
+    }
+    std::filesystem::remove(marker, ec);
+    removed_ids.push_back(std::move(id));
+  }
+
+  // The mods.toml entry is only ever dropped here, once the folder is
+  // actually gone -- MarkPendingRemoval deliberately leaves it in place so
+  // the mod keeps showing/loading normally until this point.
+  if (!removed_ids.empty()) {
+    auto entries = Load(root);
+    entries.erase(std::remove_if(entries.begin(), entries.end(),
+                                 [&](const ModStateEntry& e) {
+                                   return std::find(removed_ids.begin(), removed_ids.end(), e.id) !=
+                                          removed_ids.end();
+                                 }),
+                  entries.end());
+    Save(root, entries);
+  }
 }
 
 }  // namespace rex::system

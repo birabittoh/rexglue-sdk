@@ -403,6 +403,14 @@ void Runtime::ResolveEnabledMods() {
     return;
   }
 
+  // Swap in any update staged by a previous session's mod manager (see
+  // ModState::StagePendingUpdate) before anything below reads mods.toml or
+  // enumerates mod folders -- this is the only point in the process's
+  // lifetime where nothing has yet had a chance to load/open those files, so
+  // it's the only safe place to replace them.
+  system::ModState::ApplyPendingUpdates(mods_root);
+  system::ModState::ApplyPendingRemovals(mods_root);
+
   // mods.toml is the source of truth: an ordered list of {id, enabled}
   // entries, reconciled against what's actually on disk. The enabled_mods
   // cvar is only consulted as a fallback, so a bare command-line launch

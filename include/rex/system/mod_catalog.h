@@ -66,6 +66,10 @@ struct CatalogInstallResult {
   bool in_progress = false;
   bool done = false;
   bool ok = false;
+  // true if the install was staged rather than applied immediately (the mod
+  // was already installed and possibly loaded this session) -- see
+  // rex::system::ModState::StagePendingUpdate. Only meaningful when ok.
+  bool staged = false;
   std::string message;
   uint64_t downloaded_bytes = 0;
   uint64_t total_bytes = 0;
@@ -119,9 +123,12 @@ class ModCatalog {
   // records/refreshes its mods.toml entry. Shared by InstallWorker for both
   // the requested mod and any unmet `requires` dependency it pulls in first.
   // Never throws; returns false and fills `out_error` on any failure
-  // (download, checksum mismatch, extract, filesystem).
+  // (download, checksum mismatch, extract, filesystem). Sets `out_staged` to
+  // true if `entry` was already installed and the new content was staged
+  // (see rex::system::ModState::StagePendingUpdate) rather than written
+  // straight to its live folder.
   bool InstallOneMod(const CatalogMod& entry, const std::filesystem::path& mods_root,
-                     std::string& out_error);
+                     std::string& out_error, bool& out_staged);
 
   std::atomic<CatalogState> state_{CatalogState::kIdle};
   mutable std::mutex mods_mutex_;

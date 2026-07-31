@@ -619,7 +619,7 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
           mod_manager_overlay_.reset();
         } else {
           mod_manager_overlay_ = std::make_unique<ui::ModManagerDialog>(
-              imgui_drawer_.get(), drawer, runtime_.get(), window_.get());
+              imgui_drawer_.get(), drawer, runtime_.get(), window_.get(), config_path_);
         }
       },
       [this] { return static_cast<bool>(mod_manager_overlay_); }, "Mods##overlay");
@@ -990,7 +990,7 @@ void ReXApp::OnFileDrop(ui::FileDropEvent& e) {
 
   if (!mod_manager_overlay_) {
     mod_manager_overlay_ = std::make_unique<ui::ModManagerDialog>(
-        imgui_drawer_.get(), immediate_drawer_.get(), runtime_.get(), window_.get());
+        imgui_drawer_.get(), immediate_drawer_.get(), runtime_.get(), window_.get(), config_path_);
   }
   static_cast<ui::ModManagerDialog*>(mod_manager_overlay_.get())->SideloadArchive(e.filename());
 }
