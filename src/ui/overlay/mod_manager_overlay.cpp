@@ -403,29 +403,36 @@ void ModManagerDialog::DrawInstalledTab() {
       ImGui::PushStyleColor(ImGuiCol_Text, kMutedText);
     }
 
+    // Row controls stacked in their own vertical column (checkbox, reorder
+    // arrows, remove) so they don't crowd the title/icon on one line.
+    bool removed = false;
+    ImGui::BeginGroup();
     bool enabled = entry.enabled;
     if (ImGui::Checkbox("##enabled", &enabled)) {
       entry.enabled = enabled;
       PersistAndRevalidate();
     }
-    ImGui::SameLine();
     ImGui::BeginDisabled(i == 0);
     if (ImGui::ArrowButton("##up", ImGuiDir_Up) && i > 0) {
       std::swap(entries_[i], entries_[i - 1]);
       PersistAndRevalidate();
     }
     ImGui::EndDisabled();
-    ImGui::SameLine();
     ImGui::BeginDisabled(i + 1 >= entries_.size());
     if (ImGui::ArrowButton("##down", ImGuiDir_Down) && i + 1 < entries_.size()) {
       std::swap(entries_[i], entries_[i + 1]);
       PersistAndRevalidate();
     }
     ImGui::EndDisabled();
-    ImGui::SameLine();
     if (ImGui::SmallButton("Remove")) {
       rex::system::ModState::RemoveMod(mods_root_, entry.id);
       ReloadFromDisk();
+      removed = true;
+    }
+    ImGui::EndGroup();
+    ImGui::SameLine();
+
+    if (removed) {
       if (!enabled) {
         ImGui::PopStyleColor();  // balance the push above before bailing out
       }
@@ -436,7 +443,6 @@ void ModManagerDialog::DrawInstalledTab() {
       // frame redraws the updated list from scratch.
       break;
     }
-    ImGui::SameLine();
 
     ImmediateTexture* icon = GetLocalIcon(mod);
     if (icon) {
