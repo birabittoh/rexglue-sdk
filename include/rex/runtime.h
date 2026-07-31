@@ -259,14 +259,6 @@ class Runtime {
   // Set in Setup() before ValidateModDependencies() runs.
   std::string game_version_;
 
-  // This host application's mod-catalog identity, from
-  // RuntimeConfig::catalog_name.
-  std::string catalog_name_;
-
-  // Snapshot of the resolved mods.toml entries at the end of
-  // ResolveEnabledMods(); see ModStateAtStartup().
-  std::vector<system::ModStateEntry> mod_state_at_startup_;
-
   std::filesystem::path game_data_root_;
   std::filesystem::path user_data_root_;
   std::filesystem::path update_data_root_;
@@ -298,6 +290,24 @@ class Runtime {
   std::unique_ptr<runtime::ExportResolver> export_resolver_;
   std::unique_ptr<system::ModRegistry> mod_registry_;
   std::unique_ptr<system::ModConflictTracker> mod_conflict_tracker_;
+
+  // These two are appended after every pre-existing member (rather than
+  // grouped with the other mod-related fields above) so a code mod DLL
+  // prebuilt against an older SDK -- whose compiled-in offsets for
+  // mod_registry()/mod_conflict_tracker()/etc. (inline accessors, so the
+  // offset is baked into the mod's own binary at its build time) predate
+  // these fields -- still resolves every pre-existing member correctly.
+  // Inserting a new member anywhere before the end shifts every later
+  // member's offset and corrupts such a mod's view of Runtime; only ever add
+  // new Runtime state here, at the tail, never in the middle.
+  //
+  // This host application's mod-catalog identity, from
+  // RuntimeConfig::catalog_name.
+  std::string catalog_name_;
+
+  // Snapshot of the resolved mods.toml entries at the end of
+  // ResolveEnabledMods(); see ModStateAtStartup().
+  std::vector<system::ModStateEntry> mod_state_at_startup_;
 
   static Runtime* instance_;
 };
