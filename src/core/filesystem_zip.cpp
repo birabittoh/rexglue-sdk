@@ -11,7 +11,9 @@
  */
 #include <rex/filesystem.h>
 
+#include <chrono>
 #include <fstream>
+#include <thread>
 #include <vector>
 
 #include <miniz.h>
@@ -119,6 +121,49 @@ bool ExtractZip(const std::filesystem::path& archive, const std::filesystem::pat
 
   mz_zip_reader_end(&zip);
   return ok;
+}
+
+bool MoveOrCopyDirectory(const std::filesystem::path& from, const std::filesystem::path& to,
+                         std::string& error) {
+  constexpr int kMaxAttempts = 5;
+  constexpr auto kRetryDelay = std::chrono::milliseconds(100);
+
+  std::error_code ec;
+  for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+    ec.clear();
+    std::filesystem::rename(from, to, ec);
+    if (!ec) {
+      return true;
+    }
+    if (attempt < kMaxAttempts) {
+      std::this_thread::sleep_for(kRetryDelay);
+    }
+  }
+
+  // Cross-filesystem rename fails every time, not just transiently, so don't
+  // burn the same retry budget on it again -- go straight to the copy
+  // fallback, which gets its own retry loop below for the same transient-lock
+  // reason `rename` above did.
+  for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+    ec.clear();
+    std::filesystem::create_directories(to, ec);
+    if (!ec) {
+      std::filesystem::copy(from, to,
+                            std::filesystem::copy_options::recursive |
+                                std::filesystem::copy_options::overwrite_existing,
+                            ec);
+    }
+    if (!ec) {
+      std::filesystem::remove_all(from, ec);
+      return true;
+    }
+    if (attempt < kMaxAttempts) {
+      std::this_thread::sleep_for(kRetryDelay);
+    }
+  }
+
+  error = "failed to install extracted mod: " + ec.message();
+  return false;
 }
 
 }  // namespace rex::filesystem

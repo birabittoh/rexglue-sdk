@@ -17,6 +17,7 @@
 
 #include <imgui.h>
 
+#include <rex/cvar.h>
 #include <rex/net/http.h>
 #include <rex/platform/process.h>
 #include <rex/runtime.h>
@@ -127,11 +128,13 @@ std::unique_ptr<ImmediateTexture> UploadRGBA(ImmediateDrawer* drawer,
 }  // namespace
 
 ModManagerDialog::ModManagerDialog(ImGuiDrawer* imgui_drawer, ImmediateDrawer* immediate_drawer,
-                                   rex::Runtime* runtime, Window* window)
+                                   rex::Runtime* runtime, Window* window,
+                                   std::filesystem::path config_path)
     : ImGuiDialog(imgui_drawer),
       immediate_drawer_(immediate_drawer),
       runtime_(runtime),
-      window_(window) {}
+      window_(window),
+      config_path_(std::move(config_path)) {}
 
 ModManagerDialog::~ModManagerDialog() {
   for (auto& [url, thread] : icon_downloads_) {
@@ -172,9 +175,12 @@ void ModManagerDialog::SideloadArchive(std::filesystem::path zip_path) {
     sideload_result_.done = true;
     sideload_result_.ok = result.has_value();
     if (result) {
-      sideload_result_.message = (result->updated ? "Updated \"" : "Sideloaded \"") + result->id +
-                                 "\"" +
-                                 (result->version.empty() ? "" : " (v" + result->version + ")");
+      sideload_result_.message = (result->staged    ? "Downloaded update for \""
+                                  : result->updated ? "Updated \""
+                                                    : "Sideloaded \"") +
+                                 result->id + "\"" +
+                                 (result->version.empty() ? "" : " (v" + result->version + ")") +
+                                 (result->staged ? " -- restart to apply" : "");
       sideload_result_.focus_id = result->id;
     } else {
       sideload_result_.message = error;
@@ -193,6 +199,9 @@ void ModManagerDialog::ReloadFromDisk() {
     }
   }
   loaded_ = true;
+  pending_removal_ids_ = rex::system::ModState::PendingRemovals(mods_root_);
+  has_pending_updates_ =
+      rex::system::ModState::HasPendingUpdates(mods_root_) || !pending_removal_ids_.empty();
   issues_ = rex::system::ModState::Validate(entries_, manifests_,
                                             runtime_ ? runtime_->game_version() : "",
                                             rex::system::ModState::HostPlatformId());
@@ -305,13 +314,13 @@ void ModManagerDialog::OnDraw(ImGuiIO& io) {
 }
 
 void ModManagerDialog::DrawRestartBanner() {
-  if (!StateDiffersFromStartup())
+  if (!StateDiffersFromStartup() && !has_pending_updates_)
     return;
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.2f, 1.0f));
   ImGui::TextWrapped("Mod changes require a restart to take effect.");
   ImGui::PopStyleColor();
   ImGui::SameLine();
-  if (ImGui::SmallButton("Restart Now")) {
+  if (ImGui::SmallButton(has_pending_updates_ ? "Restart & Apply" : "Restart Now")) {
     if (rex::platform::process::Relaunch() && window_) {
       window_->RequestClose();
     }
@@ -383,6 +392,10 @@ void ModManagerDialog::DrawInstalledTab() {
   };
 
   ImGui::BeginChild("##modlist", ImVec2(0.0f, 0.0f), false);
+  if (pending_scroll_restore_ >= 0.0f) {
+    ImGui::SetScrollY(pending_scroll_restore_);
+    pending_scroll_restore_ = -1.0f;
+  }
   int priority = 1;
   for (size_t i = 0; i < entries_.size(); ++i) {
     auto& entry = entries_[i];
@@ -399,48 +412,68 @@ void ModManagerDialog::DrawInstalledTab() {
       focus_mod_id_.clear();
       ImGui::SetScrollHereY(0.2f);
     }
-    if (!entry.enabled) {
+    bool pending_removal = pending_removal_ids_.contains(entry.id);
+    if (!entry.enabled || pending_removal) {
       ImGui::PushStyleColor(ImGuiCol_Text, kMutedText);
     }
 
     // Row controls stacked in their own vertical column (checkbox, reorder
-    // arrows, remove) so they don't crowd the title/icon on one line.
-    bool removed = false;
+    // arrows, remove/restore) so they don't crowd the title/icon on one line.
+    bool list_changed = false;
     ImGui::BeginGroup();
     bool enabled = entry.enabled;
+    ImGui::BeginDisabled(pending_removal);
     if (ImGui::Checkbox("##enabled", &enabled)) {
       entry.enabled = enabled;
       PersistAndRevalidate();
     }
     ImGui::BeginDisabled(i == 0);
     if (ImGui::ArrowButton("##up", ImGuiDir_Up) && i > 0) {
+      pending_scroll_restore_ = ImGui::GetScrollY();
       std::swap(entries_[i], entries_[i - 1]);
       PersistAndRevalidate();
     }
     ImGui::EndDisabled();
     ImGui::BeginDisabled(i + 1 >= entries_.size());
     if (ImGui::ArrowButton("##down", ImGuiDir_Down) && i + 1 < entries_.size()) {
+      pending_scroll_restore_ = ImGui::GetScrollY();
       std::swap(entries_[i], entries_[i + 1]);
       PersistAndRevalidate();
     }
     ImGui::EndDisabled();
-    if (ImGui::SmallButton("Remove")) {
-      rex::system::ModState::RemoveMod(mods_root_, entry.id);
-      ReloadFromDisk();
-      removed = true;
+    ImGui::EndDisabled();  // pending_removal
+    if (pending_removal) {
+      if (ImGui::SmallButton("Restore")) {
+        pending_scroll_restore_ = ImGui::GetScrollY();
+        rex::system::ModState::UnmarkPendingRemoval(mods_root_, entry.id);
+        ReloadFromDisk();
+        list_changed = true;
+      }
+    } else {
+      // MarkPendingRemoval only touches its own marker file -- unlike a
+      // straight ModState::RemoveMod, this can't be blocked by a currently-
+      // loaded mod DLL, since nothing is deleted until the next launch
+      // (ApplyPendingRemovals), by which point this process (and whatever it
+      // had loaded) has exited.
+      if (ImGui::SmallButton("Remove")) {
+        pending_scroll_restore_ = ImGui::GetScrollY();
+        rex::system::ModState::MarkPendingRemoval(mods_root_, entry.id);
+        ReloadFromDisk();
+        list_changed = true;
+      }
     }
     ImGui::EndGroup();
     ImGui::SameLine();
 
-    if (removed) {
-      if (!enabled) {
+    if (list_changed) {
+      if (!enabled || pending_removal) {
         ImGui::PopStyleColor();  // balance the push above before bailing out
       }
       ImGui::PopID();
-      // entries_ was just replaced wholesale by ReloadFromDisk(); bail out of
-      // this frame's iteration rather than continuing to index into it with
-      // a stale i, or re-touching a row that's now a different mod. The next
-      // frame redraws the updated list from scratch.
+      // ReloadFromDisk() just replaced entries_/pending_removal_ids_
+      // wholesale; bail out of this frame's iteration rather than continuing
+      // to index into them with a stale i, or re-touching a row that's now a
+      // different mod. The next frame redraws the updated list from scratch.
       break;
     }
 
@@ -463,6 +496,13 @@ void ModManagerDialog::DrawInstalledTab() {
                          mod.display_name.empty() ? entry.id.c_str() : mod.display_name.c_str());
     } else {
       ImGui::Text("%s", mod.display_name.empty() ? entry.id.c_str() : mod.display_name.c_str());
+    }
+    if (pending_removal) {
+      ImGui::SameLine();
+      ImGui::TextColored(kErrorBadge, "[pending removal]");
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Will be deleted on restart. Click Restore to keep it.");
+      }
     }
     if (!mod.version.empty()) {
       ImGui::SameLine();
@@ -522,7 +562,7 @@ void ModManagerDialog::DrawInstalledTab() {
     DrawCvarsSection(mod);
     ImGui::EndGroup();
 
-    if (!entry.enabled) {
+    if (!entry.enabled || pending_removal) {
       ImGui::PopStyleColor();
     }
     ImGui::Separator();
@@ -670,7 +710,15 @@ void ModManagerDialog::DrawKeybindsSection(const rex::system::ModInfo& mod) {
       if (captured == kCancelSentinel) {
         listening_bind_.clear();
       } else if (!captured.empty()) {
-        rex::ui::SetBindKey(bind.name, captured);
+        // SetBindKey only marks the underlying cvar persist-eligible
+        // (rex::cvar::SetFlagByName's persist=true) -- it doesn't write
+        // anything to disk itself. Without this SaveConfig call, the new
+        // key takes effect immediately (SetBindKey updates the live
+        // BindEntry) but is lost the moment the process exits, since
+        // nothing else was going to flush it to config_path_.
+        if (rex::ui::SetBindKey(bind.name, captured) && !config_path_.empty()) {
+          rex::cvar::SaveConfig(config_path_);
+        }
         listening_bind_.clear();
       }
     }

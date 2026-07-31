@@ -336,7 +336,8 @@ void ModCatalog::InstallAsync(const CatalogMod& entry, const std::filesystem::pa
 }
 
 bool ModCatalog::InstallOneMod(const CatalogMod& entry, const std::filesystem::path& mods_root,
-                               std::string& out_error) {
+                               std::string& out_error, bool& out_staged) {
+  out_staged = false;
   std::error_code ec;
   std::filesystem::create_directories(mods_root, ec);
   if (ec) {
@@ -402,21 +403,27 @@ bool ModCatalog::InstallOneMod(const CatalogMod& entry, const std::filesystem::p
   }
 
   auto dest = mods_root / entry.mod_id;
-  std::filesystem::remove_all(dest, ec);
-  std::filesystem::rename(content_root, dest, ec);
-  if (ec) {
-    // Cross-filesystem rename can fail; fall back to a recursive copy.
-    ec.clear();
-    std::filesystem::create_directories(dest, ec);
-    std::filesystem::copy(content_root, dest,
-                          std::filesystem::copy_options::recursive |
-                              std::filesystem::copy_options::overwrite_existing,
-                          ec);
+  bool updated = std::filesystem::exists(dest, ec);
+  // Clear out the old install first, same as always -- but if that fails,
+  // `dest` has a file Windows won't let go of (most likely a mod DLL this
+  // very process still has mapped/open), so there's no way to replace it in
+  // place. Stage the new content instead; ModState::ApplyPendingUpdates swaps
+  // it onto `dest` at the next launch, before anything has a chance to open
+  // it. A fresh install has nothing to clear, so it always writes straight
+  // to dest.
+  if (updated) {
+    std::filesystem::remove_all(dest, ec);
     if (ec) {
-      std::filesystem::remove_all(staging, ec);
-      out_error = "failed to install extracted mod: " + ec.message();
-      return false;
+      if (!ModState::StagePendingUpdate(mods_root, entry.mod_id, content_root, out_error)) {
+        std::filesystem::remove_all(staging, ec);
+        return false;
+      }
+      out_staged = true;
     }
+  }
+  if (!out_staged && !rex::filesystem::MoveOrCopyDirectory(content_root, dest, out_error)) {
+    std::filesystem::remove_all(staging, ec);
+    return false;
   }
   std::filesystem::remove_all(staging, ec);
 
@@ -480,7 +487,8 @@ void ModCatalog::InstallWorker(CatalogMod entry, std::filesystem::path mods_root
         continue;  // nothing we can auto-install for this requirement
       }
       std::string dep_error;
-      if (!InstallOneMod(*req_mod, mods_root, dep_error)) {
+      bool dep_staged = false;
+      if (!InstallOneMod(*req_mod, mods_root, dep_error, dep_staged)) {
         fail("failed to install dependency \"" + req.name + "\": " + dep_error);
         return;
       }
@@ -489,13 +497,17 @@ void ModCatalog::InstallWorker(CatalogMod entry, std::filesystem::path mods_root
   }
 
   std::string error;
-  if (!InstallOneMod(entry, mods_root, error)) {
+  bool staged = false;
+  if (!InstallOneMod(entry, mods_root, error, staged)) {
     fail(std::move(error));
     return;
   }
 
-  std::string message = "Installed \"" + entry.mod_id + "\"" +
-                        (entry.version.empty() ? "" : " (v" + entry.version + ")");
+  std::string message = (staged ? "Downloaded update for \"" : "Installed \"") + entry.mod_id +
+                        "\"" + (entry.version.empty() ? "" : " (v" + entry.version + ")");
+  if (staged) {
+    message += " -- restart to apply";
+  }
   if (!installed_deps.empty()) {
     message += " (+" + std::to_string(installed_deps.size()) +
                (installed_deps.size() == 1 ? " dependency" : " dependencies") + ")";
@@ -505,6 +517,7 @@ void ModCatalog::InstallWorker(CatalogMod entry, std::filesystem::path mods_root
     install_result_.in_progress = false;
     install_result_.done = true;
     install_result_.ok = true;
+    install_result_.staged = staged;
     install_result_.message = std::move(message);
   }
 }

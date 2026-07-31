@@ -25,6 +25,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <rex/system/mod_catalog.h>  // CatalogMod, ModCatalog
@@ -44,8 +45,12 @@ class Window;
 
 class ModManagerDialog : public ImGuiDialog {
  public:
+  // `config_path` is the app's own cvar config file (e.g. <game>.toml) --
+  // where a per-mod keybind rebind gets persisted immediately (see
+  // DrawKeybindsSection), same file the settings overlay's Advanced section
+  // saves to.
   ModManagerDialog(ImGuiDrawer* imgui_drawer, ImmediateDrawer* immediate_drawer,
-                   rex::Runtime* runtime, Window* window);
+                   rex::Runtime* runtime, Window* window, std::filesystem::path config_path);
   ~ModManagerDialog() override;
 
   // Sideloads a mod archive dropped onto the game window (see ReXApp::
@@ -87,12 +92,36 @@ class ModManagerDialog : public ImGuiDialog {
   ImmediateDrawer* immediate_drawer_ = nullptr;
   rex::Runtime* runtime_ = nullptr;
   Window* window_ = nullptr;
+  std::filesystem::path config_path_;
 
   std::filesystem::path mods_root_;
   std::vector<rex::system::ModStateEntry> entries_;
   std::unordered_map<std::string, rex::system::ModInfo> manifests_;
   std::vector<rex::system::ModIssue> issues_;
   bool loaded_ = false;
+  // Set (to the "##modlist" child's current scroll offset) right before any
+  // action that reorders/adds/removes a row this frame (Auto-sort, the
+  // up/down arrows, Remove, Restore) and consumed on the next BeginChild --
+  // without this, ImGui's gamepad/keyboard-nav "keep the focused widget
+  // visible" logic re-scrolls the list to wherever the clicked button ends up
+  // after the layout shifts, which reads as the view jumping on its own.
+  // -1 means nothing to restore.
+  float pending_scroll_restore_ = -1.0f;
+  // Whether HasPendingUpdates() or HasPendingRemovals() was true as of the
+  // last ReloadFromDisk() -- drives DrawRestartBanner's "Restart & Apply"
+  // wording (a staged update/deferred removal needs a restart to fully
+  // take effect just like an enable/disable/reorder change does, but
+  // StateDiffersFromStartup() alone wouldn't catch either since neither
+  // touches mods.toml's in-memory entries_ beyond what ReloadFromDisk
+  // already reflects).
+  bool has_pending_updates_ = false;
+  // Ids currently marked for removal (see rex::system::ModState::
+  // MarkPendingRemoval), refreshed by ReloadFromDisk. The folder and
+  // mods.toml entry for these are left untouched until the next launch, so
+  // they keep showing up in entries_ like any other installed mod --
+  // DrawInstalledTab uses this set only to render them differently (a
+  // "Restore" button in place of "Remove", plus a badge).
+  std::unordered_set<std::string> pending_removal_ids_;
 
   rex::system::ModCatalog catalog_;
   bool catalog_refresh_requested_ = false;
