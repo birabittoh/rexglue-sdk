@@ -178,8 +178,12 @@ bool WindowSDL::OpenImpl() {
                            kCFPreferencesCurrentApplication);
   CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
 #endif
-  // SDL3 requires explicit opt-in for text input events.
-  SDL_StartTextInput(sdl_window_);
+  // SDL3 requires explicit opt-in for text input events, but it is not
+  // enabled here: leaving it on for the whole session flags the window as an
+  // active text field, which makes the desktop's input assist (on-screen
+  // keyboard on SteamOS/gamescope, IME candidate windows, autocomplete) show
+  // up during normal button-only gameplay. It is turned on by
+  // SetTextInputActive only while a text-entry widget is focused.
   ApplyCursorVisibilityNow();
   SDL_ShowWindow(sdl_window_);
 
@@ -267,6 +271,18 @@ void WindowSDL::ApplyNewMouseCapture() {
 
 void WindowSDL::ApplyNewMouseRelease() {
   SDL_CaptureMouse(false);
+}
+
+void WindowSDL::SetTextInputActive(bool active) {
+  if (!sdl_window_ || text_input_active_ == active) {
+    return;
+  }
+  text_input_active_ = active;
+  if (active) {
+    SDL_StartTextInput(sdl_window_);
+  } else {
+    SDL_StopTextInput(sdl_window_);
+  }
 }
 
 void WindowSDL::ApplyNewCursorVisibility(CursorVisibility old_cursor_visibility) {
