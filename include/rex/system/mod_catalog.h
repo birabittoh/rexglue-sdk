@@ -115,6 +115,13 @@ class ModCatalog {
   void FetchWorker(std::string catalog_name, std::string query_url, std::string games_collection,
                    std::string mods_collection);
   void InstallWorker(CatalogMod entry, std::filesystem::path mods_root);
+  // Downloads+verifies+extracts+installs exactly one mod into mods_root and
+  // records/refreshes its mods.toml entry. Shared by InstallWorker for both
+  // the requested mod and any unmet `requires` dependency it pulls in first.
+  // Never throws; returns false and fills `out_error` on any failure
+  // (download, checksum mismatch, extract, filesystem).
+  bool InstallOneMod(const CatalogMod& entry, const std::filesystem::path& mods_root,
+                     std::string& out_error);
 
   std::atomic<CatalogState> state_{CatalogState::kIdle};
   mutable std::mutex mods_mutex_;

@@ -306,6 +306,14 @@ read/write UI over everything above:
   - Installing verifies the downloaded asset's SHA-256 against the
     catalog's `checksum` and **hard-refuses on mismatch**, never
     extracting a payload that doesn't match what was approved.
+  - Installing or updating a mod also pulls in the latest published version
+    of each unmet `requires` dependency first (`ModCatalog::InstallWorker`),
+    same as the companion desktop launcher's own install flow -- one level
+    deep (a dependency's own dependencies aren't resolved), skipping any
+    dependency that's already installed at a version meeting its pin. A
+    dependency that isn't in the catalog (no `assetUrl`) is left for the
+    player to find manually; a dependency download/checksum/extract failure
+    aborts the whole install rather than partially applying it.
 - **Sideloading (drag-and-drop)**: dropping a `.zip` onto the game window
   (`ReXApp::OnFileDrop`, `src/ui/rex_app.cpp`) installs it the same way a
   catalog install does -- extract, unwrap a single top-level directory if
