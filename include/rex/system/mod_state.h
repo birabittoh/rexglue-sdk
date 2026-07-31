@@ -72,6 +72,13 @@ class ModState {
   // if missing. Logs and returns false on failure rather than throwing.
   static bool Save(const std::filesystem::path& root, const std::vector<ModStateEntry>& entries);
 
+  // Deletes <root>/<id> entirely (if it exists) and drops its entry from
+  // mods.toml, saving the result. Rejects `id` outright (returns false,
+  // touches nothing) if it's empty or contains a path separator/"."/".." --
+  // ids only ever come from real, already-reconciled folder names, so this
+  // is a defensive check rather than something normal use should ever hit.
+  static bool RemoveMod(const std::filesystem::path& root, const std::string& id);
+
   // Enumerates every immediate subdirectory of `root` (installed mod ids),
   // sorted for determinism.
   static std::vector<std::string> InstalledIds(const std::filesystem::path& root);

@@ -159,6 +159,29 @@ bool ModState::Save(const std::filesystem::path& root, const std::vector<ModStat
   return true;
 }
 
+bool ModState::RemoveMod(const std::filesystem::path& root, const std::string& id) {
+  if (id.empty() || id == "." || id == ".." || id.find('/') != std::string::npos ||
+      id.find('\\') != std::string::npos) {
+    return false;
+  }
+
+  auto dir = root / id;
+  std::error_code ec;
+  if (std::filesystem::exists(dir, ec)) {
+    std::filesystem::remove_all(dir, ec);
+    if (ec) {
+      REXSYS_ERROR("Failed to remove mod folder {}: {}", dir.string(), ec.message());
+      return false;
+    }
+  }
+
+  auto entries = Load(root);
+  entries.erase(std::remove_if(entries.begin(), entries.end(),
+                               [&](const ModStateEntry& e) { return e.id == id; }),
+                entries.end());
+  return Save(root, entries);
+}
+
 std::vector<std::string> ModState::InstalledIds(const std::filesystem::path& root) {
   std::vector<std::string> ids;
   std::error_code ec;

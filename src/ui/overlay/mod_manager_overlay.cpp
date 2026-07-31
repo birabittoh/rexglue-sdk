@@ -409,14 +409,32 @@ void ModManagerDialog::DrawInstalledTab() {
       PersistAndRevalidate();
     }
     ImGui::SameLine();
-    if (ImGui::SmallButton("Up") && i > 0) {
+    ImGui::BeginDisabled(i == 0);
+    if (ImGui::ArrowButton("##up", ImGuiDir_Up) && i > 0) {
       std::swap(entries_[i], entries_[i - 1]);
       PersistAndRevalidate();
     }
+    ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::SmallButton("Down") && i + 1 < entries_.size()) {
+    ImGui::BeginDisabled(i + 1 >= entries_.size());
+    if (ImGui::ArrowButton("##down", ImGuiDir_Down) && i + 1 < entries_.size()) {
       std::swap(entries_[i], entries_[i + 1]);
       PersistAndRevalidate();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Remove")) {
+      rex::system::ModState::RemoveMod(mods_root_, entry.id);
+      ReloadFromDisk();
+      if (!enabled) {
+        ImGui::PopStyleColor();  // balance the push above before bailing out
+      }
+      ImGui::PopID();
+      // entries_ was just replaced wholesale by ReloadFromDisk(); bail out of
+      // this frame's iteration rather than continuing to index into it with
+      // a stale i, or re-touching a row that's now a different mod. The next
+      // frame redraws the updated list from scratch.
+      break;
     }
     ImGui::SameLine();
 
