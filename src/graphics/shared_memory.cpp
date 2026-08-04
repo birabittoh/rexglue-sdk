@@ -389,6 +389,16 @@ bool SharedMemory::RequestRanges(const std::pair<uint32_t, uint32_t>* ranges, si
     }
   }
 
+  // Note: there must be no "everything is already valid" early-out scan of
+  // system_page_flags_valid_ outside the global critical region. The
+  // validity bits are cleared by the memory write watch callback on the
+  // guest CPU thread while holding that lock, so an unsynchronized read can
+  // observe a stale set bit for a page that has just been invalidated, skip
+  // its upload, and leave the shared memory buffer holding bytes from
+  // whatever previously occupied that guest page. The locked scan below
+  // already returns early when nothing needs uploading. See xenia's
+  // SharedMemory::RequestRange, which likewise does the whole scan under the
+  // lock.
   upload_ranges_.clear();
   auto append_upload_range = [this](uint32_t page_start, uint32_t page_count) {
     if (!page_count) {
