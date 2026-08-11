@@ -83,6 +83,9 @@ class IGraphicsSystem {
     (void)ptr;
     (void)block_size_log2;
   }
+  // Called by VdSwap once the swap packet has been written into the ring, so
+  // the system can tell how far the GPU is behind the guest.
+  virtual void OnGuestSwapSubmitted() {}
 
   // Persistent shader/pipeline storage under the cache root. Default: none.
   virtual void InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,

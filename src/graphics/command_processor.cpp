@@ -1099,6 +1099,7 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
   IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
 
   ++counter_;
+  swap_counter_.fetch_add(1, std::memory_order_relaxed);
 
   // Guest-frame boundary for mods: fires once per presented frame, on this
   // (command-processor) thread. See GraphicsSystem::SetHostSwapCallback.

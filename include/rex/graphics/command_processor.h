@@ -92,6 +92,29 @@ class CommandProcessor {
   uint32_t counter() const { return counter_; }
   void increment_counter() { counter_++; }
 
+  // Number of guest swaps (PM4 XE_SWAP packets) actually executed by the
+  // command processor, i.e. real presents. Unlike counter_ this is not also
+  // ticked by the vblank timer, so it is a pure measure of GPU-side progress.
+  // Written on the command-processor thread, read from anywhere.
+  uint64_t swap_counter() const { return swap_counter_.load(std::memory_order_relaxed); }
+
+  // Number of swaps the guest has written into the ring buffer (VdSwap).
+  // Written on guest threads, read from anywhere.
+  void increment_submitted_swap_counter() {
+    submitted_swap_counter_.fetch_add(1, std::memory_order_relaxed);
+  }
+  uint64_t submitted_swap_counter() const {
+    return submitted_swap_counter_.load(std::memory_order_relaxed);
+  }
+
+  // Swaps submitted by the guest that this command processor has not executed
+  // yet, i.e. how far the GPU is behind. 0 when it is keeping up.
+  uint64_t pending_swaps() const {
+    uint64_t submitted = submitted_swap_counter();
+    uint64_t executed = swap_counter();
+    return submitted > executed ? submitted - executed : 0;
+  }
+
   Shader* active_vertex_shader() const { return active_vertex_shader_; }
   Shader* active_pixel_shader() const { return active_pixel_shader_; }
 
@@ -482,6 +505,8 @@ class CommandProcessor {
   std::vector<uint32_t> me_bin_;
 
   uint32_t counter_ = 0;
+  std::atomic<uint64_t> swap_counter_{0};
+  std::atomic<uint64_t> submitted_swap_counter_{0};
 
   uint32_t primary_buffer_ptr_ = 0;
   uint32_t primary_buffer_size_ = 0;

@@ -39,6 +39,21 @@ REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU", "Swap post effect: none, 
     .allowed({"none", "fxaa", "fxaa_extreme"})
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(vsync_follows_gpu, false, "GPU",
+                    "Pace guest vblanks against real GPU presents instead of letting the vblank "
+                    "timer free-run. Makes swap-queue depth limits GPU-referenced.");
+
+REXCVAR_DEFINE_INT32(
+    vsync_max_pending_swaps, 2, "GPU",
+    "With vsync_follows_gpu: how many guest-submitted swaps the command processor "
+    "may still owe before vblanks are held back. Below 2 the guest tends to be "
+    "held every time the CP thread is momentarily behind, which costs frame rate.");
+
+REXCVAR_DEFINE_INT32(vsync_gpu_stall_timeout_ms, 100, "GPU",
+                     "With vsync_follows_gpu: if no swap has been executed for this long, deliver "
+                     "vblanks at the full rate anyway. This is the escape hatch for guest code "
+                     "that waits on vblanks without swapping (loading, video, D3D init).");
+
 REXCVAR_DEFINE_BOOL(store_shaders, true, "GPU",
                     "Store shaders persistently and load them when loading games to avoid "
                     "runtime spikes and freezes when playing the game not for the first time.");
@@ -162,13 +177,50 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
             std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
         uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);
         uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
+        // GPU-referenced pacing state (vsync_follows_gpu).
+        uint64_t last_swap_counter = command_processor_ ? command_processor_->swap_counter() : 0;
+        uint64_t last_swap_time = last_frame_time;
         while (vsync_worker_running_) {
           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
           uint64_t interval_ticks =
               REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks;
           while (current_time - last_frame_time >= interval_ticks) {
-            MarkVblank();
+            // Consume this tick unconditionally: a vblank we decide to hold is
+            // dropped, not deferred, so we never burst to catch up.
             last_frame_time += interval_ticks;
+
+            if (REXCVAR_GET(vsync_follows_gpu) && command_processor_) {
+              uint64_t swaps = command_processor_->swap_counter();
+              if (swaps != last_swap_counter) {
+                last_swap_counter = swaps;
+                last_swap_time = current_time;
+              }
+              // Hold a vblank only while the command processor is actually
+              // behind, i.e. the guest has submitted swaps it has not executed
+              // yet. When the GPU keeps up this is 0 and vblanks are delivered
+              // at the full rate, so the frame rate is untouched; the gate only
+              // bites when retirement would otherwise outrun real presents.
+              //
+              // Deliberately not a vblanks-per-swap ratio: the guest may need
+              // several vblanks per presented frame (present interval, non-swap
+              // vblank waits), so any fixed ratio starves it and the frame rate
+              // collapses.
+              uint64_t max_pending =
+                  uint64_t(std::max(int32_t(0), REXCVAR_GET(vsync_max_pending_swaps)));
+              uint64_t stall_ticks =
+                  uint64_t(std::max(int32_t(0), REXCVAR_GET(vsync_gpu_stall_timeout_ms))) *
+                  guest_tick_frequency / 1000;
+              // Escape hatch: if the CP has made no swap progress at all for the
+              // timeout, free-run. The guest waits on vblanks for things other
+              // than swapping (loading, video, D3D init) and must not be starved
+              // of them, or it deadlocks against itself.
+              if (command_processor_->pending_swaps() > max_pending &&
+                  (current_time - last_swap_time) < stall_ticks) {
+                continue;
+              }
+            }
+
+            MarkVblank();
           }
           rex::thread::Sleep(std::chrono::milliseconds(1));
         }
@@ -323,6 +375,12 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
   uint64_t args[] = {source, interrupt_callback_data_};
   function_dispatcher_->ExecuteInterrupt(thread->thread_state(), interrupt_callback_, args,
                                          rex::countof(args));
+}
+
+void GraphicsSystem::OnGuestSwapSubmitted() {
+  if (command_processor_) {
+    command_processor_->increment_submitted_swap_counter();
+  }
 }
 
 void GraphicsSystem::MarkVblank() {
