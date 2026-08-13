@@ -872,6 +872,9 @@ void SaveConfig(const std::filesystem::path& config_path) {
   }
 
   try {
+    if (config_path.has_parent_path()) {
+      std::filesystem::create_directories(config_path.parent_path());
+    }
     std::ofstream file(config_path);
     if (!file) {
       REXLOG_ERROR("SaveConfig: failed to open {}", config_path.string());
@@ -956,6 +959,9 @@ void SaveConfigSubset(const std::filesystem::path& config_path,
   }
 
   try {
+    if (config_path.has_parent_path()) {
+      std::filesystem::create_directories(config_path.parent_path());
+    }
     std::ofstream file(config_path);
     if (!file) {
       REXLOG_ERROR("SaveConfigSubset: failed to open {}", config_path.string());
