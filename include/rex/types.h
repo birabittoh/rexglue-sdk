@@ -297,6 +297,9 @@ class MappedPtr<char> {
   operator char*() const { return host_ptr_; }
   explicit operator bool() const { return host_ptr_ != nullptr; }
 
+  // NOTE: the returned view aliases guest memory and stays valid only as long
+  // as the guest leaves that buffer alone. Copy into a std::string before
+  // storing it, capturing it in a deferred lambda, or crossing threads.
   std::string_view value() const {
     return host_ptr_ ? std::string_view(host_ptr_) : std::string_view();
   }

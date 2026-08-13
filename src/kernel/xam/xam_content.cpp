@@ -9,6 +9,8 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <string>
+
 #include <rex/cvar.h>
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
@@ -141,8 +143,13 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
     *disposition_ptr = 0;
   }
 
-  auto run = [content_manager, xuid, root_name = root_name.value(), flags, content_data,
-              disposition_ptr,
+  // mapped_string::value() is a std::string_view *into guest memory*. This
+  // lambda may be queued to the dispatch thread and run long after the guest
+  // has reused that buffer, so the capture has to own its bytes; a view
+  // capture reads whatever the guest left behind (observed as an
+  // 'Invalid UTF-8' throw when hashing the root name in OpenContent).
+  auto run = [content_manager, xuid, root_name = std::string(root_name.value()), flags,
+              content_data, disposition_ptr,
               license_mask_ptr](uint32_t& extended_error, uint32_t& length) -> X_RESULT {
     X_RESULT result = X_ERROR_INVALID_PARAMETER;
     kDispositionState disposition = kDispositionState::Unknown;
