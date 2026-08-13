@@ -110,7 +110,19 @@ u32 XamUserGetName_entry(u32 user_index, mapped_string buffer, u32 buffer_len) {
     return X_E_INVALIDARG;
   }
 
+  if (!buffer || !buffer_len) {
+    return X_E_INVALIDARG;
+  }
+
   if (user_index) {
+    // Real XAM clears the first byte even when it fails, and titles rely on it.
+    // They call this without checking the return code and then compare the
+    // buffer against a cached name. Eternal Sonata's title screen does exactly
+    // that once per frame (sub_8223E378), against a zero filled cache entry for
+    // signed out slots. Leaving the caller's stack buffer untouched makes it
+    // read garbage, conclude the signed in user changed, and hard reset the
+    // session (wiping the player's Options) every frame.
+    buffer[0] = '\0';
     return X_E_NO_SUCH_USER;
   }
 
