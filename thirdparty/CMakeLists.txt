@@ -298,7 +298,14 @@ set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
 # Disable graphics APIs (unused without video)
 set(SDL_OPENGL OFF CACHE BOOL "" FORCE)
 set(SDL_OPENGLES OFF CACHE BOOL "" FORCE)
-set(SDL_VULKAN OFF CACHE BOOL "" FORCE)
+# Linux picks X11 or Wayland at runtime, so the Vulkan surface has to come from
+# whichever driver SDL chose (Plume's SDL_Vulkan_* calls crash without it).
+# Windows presenters go straight from the HWND.
+if(UNIX)
+    set(SDL_VULKAN ON CACHE BOOL "" FORCE)
+else()
+    set(SDL_VULKAN OFF CACHE BOOL "" FORCE)
+endif()
 set(SDL_METAL OFF CACHE BOOL "" FORCE)
 
 # Disable dummy drivers
