@@ -33,6 +33,60 @@ void EnableAffinityConfiguration() {
   SetProcessAffinityMask(process_handle, system_affinity_mask);
 }
 
+void EnsureTimerResolutionMillis(uint32_t period_ms) {
+  // The Windows default granularity is ~15.6ms; anything at or above that is
+  // already honoured and is not worth burning power on.
+  if (!period_ms || period_ms >= 15) {
+    return;
+  }
+
+  typedef UINT(WINAPI * timePeriodFn)(UINT);
+  static std::mutex mutex;
+  static timePeriodFn begin_period = nullptr;
+  static timePeriodFn end_period = nullptr;
+  static bool resolved = false;
+  static UINT applied = 0;  // 0 = nothing applied yet
+
+  std::lock_guard<std::mutex> lock(mutex);
+
+  // Already fine enough. The rate only ratchets up, so a coarser later request
+  // never walks back a finer one still in use.
+  if (applied && period_ms >= applied) {
+    return;
+  }
+
+  if (!resolved) {
+    resolved = true;
+    // Loaded dynamically so the SDK takes no hard link dependency on winmm.
+    // Deliberately never released: the raised resolution must hold for as long
+    // as the guest timers do.
+    HMODULE winmm = LoadLibraryW(L"winmm.dll");
+    if (winmm) {
+      begin_period = reinterpret_cast<timePeriodFn>(GetProcAddress(winmm, "timeBeginPeriod"));
+      end_period = reinterpret_cast<timePeriodFn>(GetProcAddress(winmm, "timeEndPeriod"));
+    } else {
+      LOG_LASTERROR();
+    }
+  }
+  if (!begin_period) {
+    spdlog::warn("Unable to raise host timer resolution; timer-driven guest threads may run slow");
+    return;
+  }
+
+  // Raise before dropping the old request so resolution never dips in between.
+  // TIMERR_NOERROR is 0.
+  UINT desired = static_cast<UINT>(period_ms);
+  if (begin_period(desired) != 0) {
+    spdlog::warn("Host rejected a {}ms timer resolution request", desired);
+    return;
+  }
+  if (applied && end_period) {
+    end_period(applied);
+  }
+  applied = desired;
+  spdlog::info("Host timer resolution raised to {}ms for guest periodic timers", desired);
+}
+
 uint32_t current_thread_system_id() {
   return static_cast<uint32_t>(GetCurrentThreadId());
 }
