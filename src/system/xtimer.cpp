@@ -14,6 +14,7 @@
 #include <rex/logging.h>
 #include <rex/system/xthread.h>
 #include <rex/system/xtimer.h>
+#include <rex/thread.h>
 
 namespace rex::system {
 
@@ -47,6 +48,12 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms, uint32_t routine
   }
 
   period_ms = chrono::Clock::ScaleGuestDurationMillis(period_ms);
+
+  // A periodic guest timer is rounded up to the host tick rate, so make the
+  // rate fine enough to actually deliver the period the guest asked for.
+  if (period_ms) {
+    rex::thread::EnsureTimerResolutionMillis(period_ms);
+  }
   WinSystemClock::time_point due_tp;
   if (due_time < 0) {
     // Any timer implementation uses absolute times eventually, convert as early
