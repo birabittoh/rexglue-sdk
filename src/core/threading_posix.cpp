@@ -173,6 +173,11 @@ void install_signal_handler(SignalType type) {
 // TODO(dougvj)
 void EnableAffinityConfiguration() {}
 
+// POSIX timers already honour sub-millisecond periods; nothing to raise.
+void EnsureTimerResolutionMillis(uint32_t period_ms) {
+  (void)period_ms;
+}
+
 // uint64_t ticks() { return mach_absolute_time(); }
 
 uint32_t current_thread_system_id() {

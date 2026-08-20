@@ -92,6 +92,20 @@ uint32_t logical_processor_count();
 // Must be called at startup before attempting to set thread affinity.
 void EnableAffinityConfiguration();
 
+// Ensures the host timer tick rate is fine enough to honour a periodic timer of
+// the given period, raising it only as far as that requires.
+//
+// Guest titles create periodic timers with periods below the host default
+// granularity (Windows defaults to ~15.6ms; Eternal Sonata's sound thread asks
+// for 5ms). Left alone, the host rounds those periods up and every timer-driven
+// guest thread runs slow by that ratio. Raising the tick rate costs power, so
+// callers pass the period they actually need rather than asking for the finest
+// granularity available: a 5ms request ticks at 200Hz instead of 1000Hz.
+//
+// Safe to call repeatedly and from any thread; the rate only ever ratchets up.
+// A period at or above the host default does nothing.
+void EnsureTimerResolutionMillis(uint32_t period_ms);
+
 // Gets a stable thread-specific ID, but may not be. Use for informative
 // purposes only.
 uint32_t current_thread_system_id();
