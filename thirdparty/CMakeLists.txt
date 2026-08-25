@@ -279,9 +279,13 @@ set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TEST OFF CACHE BOOL "" FORCE)
 set(SDL_UNIX_CONSOLE_BUILD ON CACHE BOOL "" FORCE)
 
-# Video provides the windowing/event layer; presenters create their own
-# D3D12/Vulkan surfaces from native handles, so SDL_RENDER and the SDL
-# graphics API integrations stay off.
+# Video provides the windowing/event layer. Presenters create their own
+# D3D12 surfaces from native handles (D3D12 has no other option), but Vulkan
+# consumers may not have one to give -- Window::GetNativeWindowHandle() only
+# ever returns a real handle on Windows, so a Linux/macOS consumer creating
+# its own Vulkan surface has to go through SDL's own SDL_Vulkan_* API
+# instead, which needs this on. SDL_RENDER (SDL's own 2D renderer) is still
+# unrelated to that and stays off.
 set(SDL_VIDEO ON CACHE BOOL "" FORCE)
 set(SDL_RENDER OFF CACHE BOOL "" FORCE)
 set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
@@ -298,7 +302,7 @@ set(SDL_CAMERA OFF CACHE BOOL "" FORCE)
 # Disable graphics APIs (unused without video)
 set(SDL_OPENGL OFF CACHE BOOL "" FORCE)
 set(SDL_OPENGLES OFF CACHE BOOL "" FORCE)
-set(SDL_VULKAN OFF CACHE BOOL "" FORCE)
+set(SDL_VULKAN ON CACHE BOOL "" FORCE)
 set(SDL_METAL OFF CACHE BOOL "" FORCE)
 
 # Disable dummy drivers

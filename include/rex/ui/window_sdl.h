@@ -33,6 +33,7 @@ class WindowSDL final : public Window {
   ~WindowSDL() override;
 
   void* GetNativeWindowHandle() const override;
+  void* GetSDLWindowHandle() const override { return sdl_window_; }
   bool SetRelativeMouseMode(bool enable) override;
   void SetTextInputActive(bool active) override;
   std::string GetClipboardText() override;
