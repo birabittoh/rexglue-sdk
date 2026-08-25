@@ -299,6 +299,14 @@ class Window {
   /// Valid after Open() returns successfully.
   virtual void* GetNativeWindowHandle() const { return nullptr; }
 
+  /// Returns the backing SDL_Window*, for consumers that create their own
+  /// Vulkan surface via SDL (e.g. SDL_Vulkan_CreateSurface), which handles
+  /// the underlying platform (X11, Wayland, ...) internally instead of
+  /// needing a platform-native handle. Only implemented by SDL-backed
+  /// Window implementations; nullptr otherwise. Valid after Open() returns
+  /// successfully.
+  virtual void* GetSDLWindowHandle() const { return nullptr; }
+
   // Desired state stored by the common Window, externally modifiable, read-only
   // in the implementation.
   void SetMainMenu(std::unique_ptr<MenuItem> new_main_menu);
