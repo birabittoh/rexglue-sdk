@@ -25,6 +25,10 @@
 #include <rex/ui/windowed_app.h>
 #include <rex/ui/windowed_app_context_sdl.h>
 
+#ifndef REXGLUE_APP_ID
+#define REXGLUE_APP_ID "app"
+#endif
+
 #if REX_PLATFORM_WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -48,7 +52,20 @@ int RunWindowedApp(int argc, char** argv) {
   {
     rex::ui::SDLWindowedAppContext app_context;
 
-    std::unique_ptr<rex::ui::WindowedApp> app = rex::ui::GetWindowedAppCreator()(app_context);
+    rex::ui::WindowedApp::Creator creator = nullptr;
+#if XE_UI_WINDOWED_APPS_IN_LIBRARY
+    // Android builds register apps by identifier instead of exposing a single
+    // GetWindowedAppCreator(). Find the one this executable implements.
+    creator = rex::ui::WindowedApp::GetCreator(REXGLUE_APP_ID);
+    if (!creator) {
+      REXLOG_ERROR("No windowed app registered with identifier '{}'", REXGLUE_APP_ID);
+      return EXIT_FAILURE;
+    }
+#else
+    creator = rex::ui::GetWindowedAppCreator();
+#endif
+
+    std::unique_ptr<rex::ui::WindowedApp> app = creator(app_context);
 
     // Load the app's config file before the context initializes SDL: cvars
     // like renderdoc_enabled influence the video driver choice, and the app's
