@@ -30,6 +30,8 @@
 
 #if REX_PLATFORM_WIN32
 #include <rex/ui/surface_win.h>
+#elif REX_PLATFORM_ANDROID
+#include <rex/ui/surface_android.h>
 #else
 #include <X11/Xlib-xcb.h>
 #include <rex/ui/surface_gnulinux.h>
@@ -420,6 +422,15 @@ std::unique_ptr<Surface> WindowSDL::CreateSurfaceImpl(Surface::TypeFlags allowed
     }
   }
 #else
+#if REX_PLATFORM_ANDROID
+  if (allowed_types & Surface::kTypeFlag_AndroidNativeWindow) {
+    ANativeWindow* native_window = static_cast<ANativeWindow*>(
+        SDL_GetPointerProperty(props, SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr));
+    if (native_window) {
+      return std::make_unique<AndroidNativeWindowSurface>(native_window, sdl_window_);
+    }
+  }
+#else
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
   if (allowed_types & Surface::kTypeFlag_WaylandSurface) {
     auto* wl_display_ptr = static_cast<struct wl_display*>(
@@ -440,6 +451,7 @@ std::unique_ptr<Surface> WindowSDL::CreateSurfaceImpl(Surface::TypeFlags allowed
       return std::make_unique<XcbWindowSurface>(XGetXCBConnection(display), x11_window);
     }
   }
+#endif  // REX_PLATFORM_ANDROID
 #endif
   return nullptr;
 }

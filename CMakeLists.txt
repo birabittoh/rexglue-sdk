@@ -28,10 +28,13 @@ endif()
 
 # Graphics backend selection
 # D3D12: Windows only, ON by default.
-# Vulkan: Cross-platform, ON by default on Linux, OFF by default on Windows.
+# Vulkan: Cross-platform, ON by default on Linux/Android, OFF by default on Windows.
 if(WIN32)
     option(REXGLUE_USE_D3D12  "Enable D3D12 graphics backend" ON)
     option(REXGLUE_USE_VULKAN "Enable Vulkan graphics backend" OFF)
+elseif(ANDROID)
+    set(REXGLUE_USE_D3D12 OFF)
+    set(REXGLUE_USE_VULKAN ON)
 else()
     set(REXGLUE_USE_D3D12 OFF)
     option(REXGLUE_USE_VULKAN "Enable Vulkan graphics backend" ON)
@@ -54,7 +57,7 @@ set(REXGLUE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT ANDROID)
     # Keep installed binaries self-contained by resolving shared libs relative
     # to the install prefix (for example, bin -> ../lib).
     set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
@@ -86,7 +89,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_DEBUG_POSTFIX d)
 set(CMAKE_RELWITHDEBINFO_POSTFIX rd)
 
-if(NOT WIN32)
+if(NOT WIN32 AND NOT ANDROID)
     # Use appropriate code model based on architecture
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64")
         # Large code model on x86_64 for linking with very large recompiled executables (35MB+)
@@ -96,6 +99,10 @@ if(NOT WIN32)
         add_compile_options(-mcmodel=small)
     endif()
     # Position-independent code for all targets
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+if(ANDROID)
+    # NDK sets PIC by default; ensure it for static libs too.
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
 
@@ -111,7 +118,17 @@ add_compile_options(
 )
 
 # Platform detection (supports AMD64 and ARM64)
-if(WIN32)
+if(ANDROID)
+    # Android must be checked before generic UNIX: CMAKE_SYSTEM_NAME is
+    # "Android" and both UNIX and LINUX are true, but the build environment
+    # (NDK toolchain, Bionic libc, no X11/Wayland) differs substantially.
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
+        set(REX_PLATFORM "android-arm64")
+    else()
+        message(FATAL_ERROR "Unsupported Android architecture: ${CMAKE_SYSTEM_PROCESSOR}. Only ARM64 is supported.")
+    endif()
+    add_compile_definitions(REX_PLATFORM_ANDROID=1 REX_PLATFORM_LINUX=1)
+elseif(WIN32)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64")
         set(REX_PLATFORM "win-amd64")
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
@@ -130,7 +147,7 @@ elseif(UNIX AND NOT APPLE)
     endif()
     add_compile_definitions(REX_PLATFORM_LINUX=1)
 else()
-    message(FATAL_ERROR "Unsupported platform. ReXGlue supports Windows and Linux only.")
+    message(FATAL_ERROR "Unsupported platform. ReXGlue supports Windows, Linux, and Android only.")
 endif()
 
 # Build config as compile definition (multi-config generators don't know config at configure time)

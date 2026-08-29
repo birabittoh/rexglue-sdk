@@ -257,3 +257,29 @@ std::vector<FileInfo> ListFiles(const std::filesystem::path& path) {
 
 }  // namespace filesystem
 }  // namespace rex
+
+#if REX_PLATFORM_ANDROID
+
+namespace rex::filesystem {
+
+void AndroidInitialize() {
+  // TODO: Initialize JNI access to ContentResolver if needed.
+}
+
+void AndroidShutdown() {
+  // TODO: Release JNI references.
+}
+
+bool IsAndroidContentUri(const std::string_view source) {
+  return source.starts_with("content://");
+}
+
+int OpenAndroidContentFileDescriptor(const std::string_view /*uri*/, const char* /*mode*/) {
+  // TODO: Implement via JNI ContentResolver.openFileDescriptor().
+  // For now, return -1 (error) so callers fall back to normal file I/O.
+  return -1;
+}
+
+}  // namespace rex::filesystem
+
+#endif  // REX_PLATFORM_ANDROID

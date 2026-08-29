@@ -75,6 +75,10 @@ if(WIN32)
     set(REXUI_PLATFORM_SOURCES
         surface_win.cpp
     )
+elseif(ANDROID)
+    set(REXUI_PLATFORM_SOURCES
+        surface_android.cpp
+    )
 else()
     set(REXUI_PLATFORM_SOURCES
         surface_gnulinux.cpp
@@ -164,7 +168,7 @@ if(REXGLUE_USE_VULKAN OR REXGLUE_USE_D3D12)
 endif()
 
 # Platform-specific dependencies
-if(NOT WIN32)
+if(NOT WIN32 AND NOT ANDROID)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(X11_XCB REQUIRED x11-xcb)
 
