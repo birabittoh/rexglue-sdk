@@ -30,7 +30,85 @@
 #include <rex/logging.h>
 #include <rex/runtime.h>
 
+#if REX_PLATFORM_ANDROID
+#include <rex/platform.h>
+#endif
+
 namespace rex::system {
+
+// =============================================================================
+// Android storage helpers
+// =============================================================================
+
+namespace {
+
+/// Returns a writable base directory for game data, config, and updates.
+/// On Android this is the app's internal storage (SDL_GetPrefPath, backed by
+/// Context.getFilesDir()). On desktop it is the directory containing the
+/// executable, matching the existing behaviour.
+std::filesystem::path GetWritableBaseDir() {
+#if REX_PLATFORM_ANDROID
+  // SDL_GetPrefPath returns <internal-storage>/org/app/ (e.g.
+  // /data/data/com.example.game/files/). The org/app arguments are only used
+  // as fallbacks on desktop; on Android, SDL uses the package name from the
+  // manifest and ignores them.
+  const char* pref = SDL_GetPrefPath("rexglue", "eternalsonata");
+  if (pref) {
+    std::filesystem::path p(pref);
+    SDL_free(const_cast<char*>(pref));
+    return p;
+  }
+  // Absolute fallback — Android always has /sdcard writable by apps with
+  // MANAGE_EXTERNAL_STORAGE or scoped storage access, but internal storage
+  // through SDL should always work.
+  return "/data/local/tmp";
+#else
+  return rex::filesystem::GetExecutableFolder();
+#endif
+}
+
+#if REX_PLATFORM_ANDROID
+/// Test whether a path looks like an Android content:// URI.
+bool IsContentUri(const std::string& path) {
+  return path.size() > 10 && path.compare(0, 10, "content://") == 0;
+}
+
+/// Copy a content:// URI to a local file using SDL_IOStream, which understands
+/// Android content URIs internally. Returns true on success.
+bool CopyContentUriToFile(const std::string& uri, const std::filesystem::path& dest) {
+  SDL_IOStream* src = SDL_IOFromFile(uri.c_str(), "rb");
+  if (!src) {
+    REXLOG_ERROR("Failed to open content URI {}: {}", uri, SDL_GetError());
+    return false;
+  }
+
+  std::filesystem::create_directories(dest.parent_path());
+  std::ofstream out(dest, std::ios::binary);
+  if (!out) {
+    SDL_CloseIO(src);
+    REXLOG_ERROR("Failed to create local file {}", dest.string());
+    return false;
+  }
+
+  constexpr size_t kBufSize = 1 << 20;  // 1 MiB
+  auto buf = std::make_unique<char[]>(kBufSize);
+  uint64_t total = 0;
+  while (true) {
+    size_t n = SDL_ReadIO(src, buf.get(), kBufSize);
+    if (n == 0)
+      break;
+    out.write(buf.get(), static_cast<std::streamsize>(n));
+    total += n;
+  }
+  SDL_CloseIO(src);
+  out.close();
+
+  REXLOG_INFO("Copied content URI to {} ({} bytes)", dest.string(), total);
+  return out.good() || total > 0;
+}
+#endif  // REX_PLATFORM_ANDROID
+
+}  // namespace
 
 // =============================================================================
 // XDVDFS extraction helpers (ported from scripts/extract_game.py)
@@ -1026,12 +1104,16 @@ std::filesystem::path ResolveConfigPath(const GameDataSelectorSettings& settings
   if (!settings.config_path.empty()) {
     return settings.config_path;
   }
+#if REX_PLATFORM_ANDROID
+  return GetWritableBaseDir() / "config.toml";
+#else
   auto exe_path = rex::filesystem::GetExecutablePath();
   if (exe_path.empty()) {
     REXLOG_WARN("No config_path given and the executable path is unknown; not persisting");
     return {};
   }
   return rex::filesystem::GetExecutableFolder() / (exe_path.stem().string() + ".toml");
+#endif
 }
 
 /// Write game_data_root (and update_data_root, if one is in use) back to the
@@ -1077,7 +1159,7 @@ static std::filesystem::path ResolveUpdateDir() {
   if (!udr.empty()) {
     return std::filesystem::path(udr);
   }
-  return rex::filesystem::GetExecutableFolder() / "update";
+  return GetWritableBaseDir() / "update";
 }
 
 static bool ProcessTitleUpdate(const std::filesystem::path& dir,
@@ -1257,6 +1339,34 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
 
   std::filesystem::path selected_path(selected);
 
+#if REX_PLATFORM_ANDROID
+  // Android's Storage Access Framework returns content:// URIs from the file
+  // picker. These can only be read through ContentResolver, not via normal
+  // file I/O. SDL_IOFromFile understands them, so we copy the file to the
+  // app's internal storage before processing.
+  if (!std::filesystem::is_directory(selected_path) && IsContentUri(selected)) {
+    auto local_dir = GetWritableBaseDir() / "import";
+    // Derive a filename from the URI's last path segment, or fall back to a
+    // generic name.
+    std::string filename = "import.iso";
+    if (auto pos = selected.rfind('/'); pos != std::string::npos && pos + 1 < selected.size()) {
+      filename = selected.substr(pos + 1);
+    }
+    auto local_path = local_dir / filename;
+    REXLOG_INFO("Android: copying content URI to {}...", local_path.string());
+
+    const char* const wait_buttons[] = {"Cancel"};
+    // TODO: show a progress dialog instead of blocking silently.
+    if (!CopyContentUriToFile(selected, local_path)) {
+      ShowErrorBox("Copy Failed",
+                   "Failed to copy the selected file to the app's storage.\n\n"
+                   "Make sure there is enough free space on the device.");
+      return false;
+    }
+    selected_path = local_path;
+  }
+#endif
+
   // Picking default.xex itself inside an extracted directory is a natural
   // mistake — treat it as selecting the directory that contains it.
   if (std::filesystem::is_regular_file(selected_path) && HasExtension(selected_path, "xex") &&
@@ -1267,10 +1377,7 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
   }
 
   // 5. Determine destination for extraction.
-  const char* base_path = SDL_GetBasePath();
-  std::filesystem::path exe_dir(base_path ? base_path : ".");
-  SDL_free(const_cast<char*>(base_path));
-  std::filesystem::path out_dir = exe_dir / "assets";
+  std::filesystem::path out_dir = GetWritableBaseDir() / "assets";
 
   // 6. Process the selection.
   if (std::filesystem::is_directory(selected_path)) {

@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <fstream>
 #include <iostream>
 
 #include <fcntl.h>
@@ -23,6 +24,7 @@
 #include <rex/assert.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
+#include <rex/platform.h>
 #include <rex/platform/env.h>
 #include <rex/string.h>
 
@@ -63,6 +65,27 @@ std::filesystem::path GetExecutableFolder() {
 }
 
 std::filesystem::path GetUserFolder() {
+#if REX_PLATFORM_ANDROID
+  // On Android, the app's internal data directory is always at
+  // /data/data/<package>/files/ (or /data/user/0/<package>/files/ on
+  // multi-user devices, which is a symlink to the same place).
+  // We can't use SDL_GetPrefPath here because rexcore doesn't link SDL3.
+  // Instead, read the path from /proc/self/cmdline (which gives the
+  // package name on Android) and derive the internal storage path.
+  std::string package;
+  if (std::ifstream f("/proc/self/cmdline"); f) {
+    std::getline(f, package, '\0');
+  }
+  if (!package.empty()) {
+    return std::filesystem::path("/data/data") / package / "files";
+  }
+  // Fallback: HOME is usually set to the app's data directory by the
+  // Android runtime.
+  if (auto home = rex::platform::env::get("HOME")) {
+    return std::filesystem::path(*home);
+  }
+  return "/data/local/tmp";
+#endif
   // get preferred data home
   if (auto xdg = rex::platform::env::get("XDG_DATA_HOME")) {
     return std::filesystem::path(*xdg);
