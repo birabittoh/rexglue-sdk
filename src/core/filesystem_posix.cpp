@@ -61,7 +61,14 @@ std::filesystem::path GetExecutablePath() {
 }
 
 std::filesystem::path GetExecutableFolder() {
+#if REX_PLATFORM_ANDROID
+  // On Android /proc/self/exe points to /system/bin/app_process64, which is
+  // meaningless for app-relative paths. Return the app's internal files
+  // directory instead — this is where configs, logs, and sidecar files live.
+  return GetUserFolder();
+#else
   return GetExecutablePath().parent_path();
+#endif
 }
 
 std::filesystem::path GetUserFolder() {

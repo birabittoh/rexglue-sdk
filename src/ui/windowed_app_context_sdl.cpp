@@ -34,7 +34,9 @@ SDLWindowedAppContext::~SDLWindowedAppContext() {
 }
 
 bool SDLWindowedAppContext::Initialize() {
-#if !REX_PLATFORM_WIN32 && !defined(VK_USE_PLATFORM_WAYLAND_KHR)
+#if REX_PLATFORM_ANDROID
+  // Android: let SDL use its native video driver; x11 does not exist here.
+#elif !REX_PLATFORM_WIN32 && !defined(VK_USE_PLATFORM_WAYLAND_KHR)
   SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11");
 #elif !REX_PLATFORM_WIN32
   // RenderDoc cannot capture or present on Wayland; when injection is

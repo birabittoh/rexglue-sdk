@@ -135,6 +135,12 @@ std::vector<std::string> WideArgsToUtf8(int argc, wchar_t** wargv) {
 
 }  // namespace
 
+// On Android, SDL3's Java layer (SDLActivity) loads the app's shared library
+// and calls SDL_main via dlsym.  Including SDL_main.h rewrites the main()
+// definition below to SDL_main() and marks it with __attribute__((visibility
+// ("default"))) so the symbol is exported from the .so.
+#include <SDL3/SDL_main.h>
+
 #if REX_PLATFORM_WIN32
 
 int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE hinstance_prev, LPWSTR command_line,
