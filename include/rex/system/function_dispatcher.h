@@ -50,7 +50,7 @@ class IModuleRegistrar {
   ~IModuleRegistrar() = default;
 };
 
-class FunctionDispatcher : public IModuleRegistrar {
+class FunctionDispatcher final : public IModuleRegistrar {
  public:
   /**
    * Callback type for module registration functions.

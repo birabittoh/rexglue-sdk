@@ -121,7 +121,7 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
   // them. These were defined but never called — without the memory init,
   // ASharedMemory_create is null and the 4 GB guest reservation fails.
   rex::memory::AndroidInitialize();
-  rex::threading::AndroidInitialize();
+  rex::thread::AndroidInitialize();
   rex::filesystem::AndroidInitialize();
 #endif
 
