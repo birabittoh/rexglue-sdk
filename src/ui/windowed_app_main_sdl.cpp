@@ -139,7 +139,9 @@ std::vector<std::string> WideArgsToUtf8(int argc, wchar_t** wargv) {
 // and calls SDL_main via dlsym.  Including SDL_main.h rewrites the main()
 // definition below to SDL_main() and marks it with __attribute__((visibility
 // ("default"))) so the symbol is exported from the .so.
+#if REX_PLATFORM_ANDROID
 #include <SDL3/SDL_main.h>
+#endif
 
 #if REX_PLATFORM_WIN32
 
