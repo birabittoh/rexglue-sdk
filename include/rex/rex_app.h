@@ -387,6 +387,11 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   // bind_ui_mode and, in Gameplay mode, PollGamepadBinds for every
   // gamepad-keyed bind (a duty this used to belong to overlay_menu_ alone).
   std::unique_ptr<ui::ImGuiDialog> gamepad_ui_;
+  // Draws the on-screen pad the touch input driver hit-tests against. Always
+  // constructed when that driver is registered; it draws nothing while the
+  // touch_controls cvar is off, so it does not need to be torn down to hide.
+  // See input/touch/touch_controls_overlay.h.
+  std::unique_ptr<ui::ImGuiDialog> touch_controls_overlay_;
   std::vector<system::ModInfo> mod_infos_;
   // Parallel to mod_infos_: narrow (UTF-8) form of each mod_root, since
   // ModHostContext.mod_root is a const char* but ModInfo::mod_root is a

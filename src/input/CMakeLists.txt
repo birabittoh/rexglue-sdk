@@ -5,6 +5,8 @@ add_library(rexinput OBJECT
     input_system.cpp
     mnk/mnk_input_driver.cpp
     nop/nop_input_driver.cpp
+    touch/touch_input_driver.cpp
+    touch/touch_controls_overlay.cpp
 )
 add_library(rex::input ALIAS rexinput)
 

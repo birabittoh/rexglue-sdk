@@ -20,6 +20,7 @@
 #include <rex/input/mnk/mnk_input_driver.h>
 #include <rex/input/nop/nop_input_driver.h>
 #include <rex/input/sdl/sdl_input_driver.h>
+#include <rex/input/touch/touch_input_driver.h>
 #include <rex/input/xinput/xinput_input_driver.h>
 #include <rex/logging.h>
 
@@ -352,6 +353,15 @@ std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
     auto mnk_driver = std::make_unique<mnk::MnkInputDriver>(nullptr, 0);
     if (mnk_driver->Setup() == X_STATUS_SUCCESS) {
       input->AddDriver(std::move(mnk_driver));
+    }
+
+    // Touch driver (on-screen pad -> controller emulation). Registered on
+    // every platform, not just the touch ones: it reports no device while the
+    // touch_controls cvar is off, and the cvar is what decides, so a desktop
+    // build can turn the pad on to work on it without a phone in hand.
+    auto touch_driver = std::make_unique<touch::TouchInputDriver>(nullptr, 0);
+    if (touch_driver->Setup() == X_STATUS_SUCCESS) {
+      input->AddDriver(std::move(touch_driver));
     }
   }
 

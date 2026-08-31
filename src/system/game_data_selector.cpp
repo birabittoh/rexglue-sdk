@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -30,7 +31,408 @@
 #include <rex/logging.h>
 #include <rex/runtime.h>
 
+#if REX_PLATFORM_ANDROID
+#include <rex/platform.h>
+#endif
+
 namespace rex::system {
+
+// =============================================================================
+// Android storage helpers
+// =============================================================================
+
+namespace {
+
+/// Whether a native folder picker exists on this platform.
+///
+/// SDL's Android dialog backend answers SDL_FILEDIALOG_OPENFOLDER with
+/// SDL_Unsupported() and fires the callback with a NULL file list, so
+/// "Select Folder..." would show no picker at all and fail instantly. Even if it
+/// did open, the Storage Access Framework hands back a `content://.../tree/...`
+/// URI that std::filesystem cannot enumerate, so an extracted directory chosen
+/// that way could not be read either. Extracted files are found by probing
+/// GetPreExtractedCandidates() instead.
+#if REX_PLATFORM_ANDROID
+constexpr bool kCanPickFolder = false;
+#else
+constexpr bool kCanPickFolder = true;
+#endif
+
+/// Returns a writable base directory for game data, config, and updates.
+/// On Android this is the app's internal storage (SDL_GetPrefPath, backed by
+/// Context.getFilesDir()). On desktop it is the directory containing the
+/// executable, matching the existing behaviour.
+std::filesystem::path GetWritableBaseDir() {
+#if REX_PLATFORM_ANDROID
+  // SDL_GetPrefPath returns <internal-storage>/org/app/ (e.g.
+  // /data/data/com.example.game/files/). The org/app arguments are only used
+  // as fallbacks on desktop; on Android, SDL uses the package name from the
+  // manifest and ignores them.
+  const char* pref = SDL_GetPrefPath("rexglue", "eternalsonata");
+  if (pref) {
+    std::filesystem::path p(pref);
+    SDL_free(const_cast<char*>(pref));
+    return p;
+  }
+  // Absolute fallback — Android always has /sdcard writable by apps with
+  // MANAGE_EXTERNAL_STORAGE or scoped storage access, but internal storage
+  // through SDL should always work.
+  return "/data/local/tmp";
+#else
+  return rex::filesystem::GetExecutableFolder();
+#endif
+}
+
+/// Directories that may already hold an extracted game, in the order they are
+/// probed before the wizard prompts for anything.
+///
+/// This is what makes an already-extracted copy usable on Android. There is no
+/// folder picker there (see kCanPickFolder), so the only way to point the app
+/// at extracted files is to put them where it already looks: its own internal
+/// storage, or the app-specific external directory, which is world-writable
+/// (`/sdcard/Android/data/<package>/files`) and therefore reachable over
+/// adb/MTP without any storage permission.
+///
+/// On desktop this only re-discovers a previous extraction next to the
+/// executable, which is harmless and saves a pointless trip through the dialog
+/// when the config file was lost.
+std::vector<std::filesystem::path> GetPreExtractedCandidates() {
+  std::vector<std::filesystem::path> dirs;
+  auto push = [&dirs](std::filesystem::path p) {
+    if (p.empty()) {
+      return;
+    }
+    if (std::find(dirs.begin(), dirs.end(), p) == dirs.end()) {
+      dirs.push_back(std::move(p));
+    }
+  };
+
+  push(GetWritableBaseDir() / "assets");
+#if REX_PLATFORM_ANDROID
+  // Both strings are cached statics owned by SDL, not to be freed.
+  if (const char* internal_path = SDL_GetAndroidInternalStoragePath()) {
+    push(std::filesystem::path(internal_path) / "assets");
+  }
+  if (const char* external_path = SDL_GetAndroidExternalStoragePath()) {
+    push(std::filesystem::path(external_path) / "assets");
+  }
+#endif
+  return dirs;
+}
+
+// =============================================================================
+// Progress feedback for the long-running steps
+// =============================================================================
+
+/// A throwaway window with a progress bar, for the phase before the app has a
+/// window of its own.
+///
+/// Extraction runs inside SetupEnvironment on every platform, well before
+/// SetupPresentation creates the real window and the ImGui context, so there is
+/// nothing to draw into: the choice is between a black screen for a minute and
+/// bringing up a window here. This one is created when the long step starts and
+/// destroyed when it ends, so the game's own window creation is unaffected (on
+/// Android that matters: SDL allows a single window, and SDL_DestroyWindow
+/// releases the activity's surface for the presenter that comes next).
+///
+/// Everything degrades gracefully: if the window or renderer cannot be created,
+/// ok() is false and the caller falls back to logging progress only.
+class ProgressWindow {
+ public:
+  ProgressWindow() {
+    if (!SDL_WasInit(SDL_INIT_VIDEO)) {
+      // Normally the windowed-app context already owns the video subsystem;
+      // only claim it when nothing has (a consumer driving the selector on its
+      // own), and hand it back in the destructor.
+      if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
+        REXLOG_WARN("Progress window: SDL_InitSubSystem(VIDEO) failed: {}", SDL_GetError());
+        return;
+      }
+      owns_video_ = true;
+    }
+
+    // The size is a hint only: Android ignores it and fills the screen.
+    window_ = SDL_CreateWindow("Preparing game files", 560, 180, 0);
+    if (!window_) {
+      REXLOG_WARN("Progress window: SDL_CreateWindow failed: {}", SDL_GetError());
+      return;
+    }
+    renderer_ = SDL_CreateRenderer(window_, nullptr);
+    if (!renderer_) {
+      REXLOG_WARN("Progress window: SDL_CreateRenderer failed: {}", SDL_GetError());
+      SDL_DestroyWindow(window_);
+      window_ = nullptr;
+      return;
+    }
+    REXLOG_INFO("Progress window up, using the '{}' render backend",
+                SDL_GetRendererName(renderer_));
+  }
+
+  ~ProgressWindow() {
+    if (renderer_) {
+      SDL_DestroyRenderer(renderer_);
+    }
+    if (window_) {
+      SDL_DestroyWindow(window_);
+    }
+    if (owns_video_) {
+      SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    }
+  }
+
+  ProgressWindow(const ProgressWindow&) = delete;
+  ProgressWindow& operator=(const ProgressWindow&) = delete;
+
+  bool ok() const { return renderer_ != nullptr; }
+
+  /// Draw one frame. `fraction` outside [0,1] means "total unknown", which
+  /// draws a block sweeping back and forth instead of a filling bar.
+  void Draw(const std::string& title, float fraction, const std::string& detail) {
+    if (!ok()) {
+      return;
+    }
+
+    // Events have to be drained or the window never paints, and on desktop the
+    // OS marks it unresponsive. Nothing here can act on them: aborting mid
+    // extraction would leave a half-written game directory behind, so a close
+    // request is only logged.
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev)) {
+      if (ev.type == SDL_EVENT_QUIT || ev.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+        REXLOG_INFO("Close requested while preparing game files; ignoring until the step finishes");
+      }
+    }
+
+    int out_w = 0, out_h = 0;
+    SDL_GetRenderOutputSize(renderer_, &out_w, &out_h);
+    if (out_w <= 0 || out_h <= 0) {
+      return;
+    }
+    // The debug font is 8 px tall, which is unreadable on a phone panel, so
+    // everything is drawn in logical units scaled up on big surfaces.
+    const float scale = std::max(1.0f, std::floor(static_cast<float>(out_h) / 220.0f));
+    SDL_SetRenderScale(renderer_, scale, scale);
+    const float w = static_cast<float>(out_w) / scale;
+    const float h = static_cast<float>(out_h) / scale;
+
+    SDL_SetRenderDrawColor(renderer_, 18, 18, 22, 255);
+    SDL_RenderClear(renderer_);
+
+    const float bar_w = std::min(w - 40.0f, 480.0f);
+    const float bar_x = (w - bar_w) / 2.0f;
+    const float bar_h = 18.0f;
+    const float bar_y = h / 2.0f - bar_h / 2.0f;
+
+    SDL_SetRenderDrawColor(renderer_, 230, 230, 235, 255);
+    SDL_RenderDebugText(renderer_, bar_x, bar_y - 26.0f, title.c_str());
+    if (!detail.empty()) {
+      SDL_SetRenderDrawColor(renderer_, 150, 150, 160, 255);
+      SDL_RenderDebugText(renderer_, bar_x, bar_y + bar_h + 12.0f, detail.c_str());
+    }
+
+    SDL_FRect frame{bar_x, bar_y, bar_w, bar_h};
+    SDL_SetRenderDrawColor(renderer_, 90, 90, 100, 255);
+    SDL_RenderRect(renderer_, &frame);
+
+    SDL_SetRenderDrawColor(renderer_, 90, 160, 240, 255);
+    if (fraction >= 0.0f && fraction <= 1.0f) {
+      SDL_FRect fill{bar_x + 2.0f, bar_y + 2.0f, (bar_w - 4.0f) * fraction, bar_h - 4.0f};
+      SDL_RenderFillRect(renderer_, &fill);
+    } else {
+      // Indeterminate: a block bouncing on a two second period.
+      const float block = (bar_w - 4.0f) * 0.25f;
+      const float t = static_cast<float>(SDL_GetTicks() % 2000) / 1000.0f;  // 0..2
+      const float travel = (bar_w - 4.0f) - block;
+      const float x = travel * (t <= 1.0f ? t : 2.0f - t);
+      SDL_FRect fill{bar_x + 2.0f + x, bar_y + 2.0f, block, bar_h - 4.0f};
+      SDL_RenderFillRect(renderer_, &fill);
+    }
+
+    SDL_RenderPresent(renderer_);
+  }
+
+ private:
+  SDL_Window* window_ = nullptr;
+  SDL_Renderer* renderer_ = nullptr;
+  bool owns_video_ = false;
+};
+
+/// Progress for the steps that take a minute or more: disc/XBLA extraction and,
+/// on Android, copying the picked content:// URI into the app's storage.
+///
+/// Owns the progress window for the duration of the step, redraws it at ~30 fps
+/// as bytes go by, and mirrors a much slower summary into the log so headless
+/// runs and bug reports still show the step advancing.
+class ProgressReporter {
+ public:
+  /// `total_bytes` of 0 means "not known up front", which shows an
+  /// indeterminate bar. Every caller supplies a real total; it stays supported
+  /// because SDL_GetIOSize can fail on a stream that has no size.
+  ProgressReporter(std::string label, uint64_t total_bytes)
+      : label_(std::move(label)), total_bytes_(total_bytes) {
+    Draw();
+    Log();
+  }
+
+  ~ProgressReporter() {
+    // Land on a full bar rather than leaving the last partial frame on screen
+    // while the caller finishes up (hashing the extracted default.xex, mostly).
+    if (total_bytes_ > 0) {
+      bytes_ = total_bytes_;
+    }
+    Draw();
+    Log();
+  }
+
+  ProgressReporter(const ProgressReporter&) = delete;
+  ProgressReporter& operator=(const ProgressReporter&) = delete;
+
+  /// Called per I/O chunk from FileReader::CopyTo (64 KiB) and from the
+  /// content-URI copy (1 MiB); the throttles here decide the actual rates.
+  void AddBytes(uint64_t n) {
+    bytes_ += n;
+    const uint64_t now = SDL_GetTicks();
+    if (now - last_draw_ms_ >= kDrawIntervalMs) {
+      Draw();
+    }
+    if (now - last_log_ms_ >= kLogIntervalMs) {
+      Log();
+    }
+  }
+
+ private:
+  static constexpr uint64_t kDrawIntervalMs = 33;
+  static constexpr uint64_t kLogIntervalMs = 2000;
+
+  /// One decimal place, without pulling in iostream formatting.
+  static std::string FormatBytes(uint64_t bytes) {
+    constexpr uint64_t kMiB = 1024ull * 1024;
+    constexpr uint64_t kGiB = kMiB * 1024;
+    const bool gib = bytes >= kGiB;
+    const uint64_t unit = gib ? kGiB : kMiB;
+    const uint64_t tenths = (bytes * 10 + unit / 2) / unit;
+    return std::to_string(tenths / 10) + "." + std::to_string(tenths % 10) +
+           (gib ? " GiB" : " MiB");
+  }
+
+  float Fraction() const {
+    if (total_bytes_ == 0) {
+      return -1.0f;
+    }
+    return std::min(
+        1.0f, static_cast<float>(static_cast<double>(bytes_) / static_cast<double>(total_bytes_)));
+  }
+
+  std::string Detail() const {
+    if (total_bytes_ == 0) {
+      return FormatBytes(bytes_);
+    }
+    const uint64_t pct = std::min<uint64_t>(100, bytes_ * 100 / total_bytes_);
+    return std::to_string(pct) + "%   " + FormatBytes(bytes_) + " of " + FormatBytes(total_bytes_);
+  }
+
+  void Draw() {
+    last_draw_ms_ = SDL_GetTicks();
+    window_.Draw(label_, Fraction(), Detail());
+  }
+
+  void Log() {
+    last_log_ms_ = SDL_GetTicks();
+    REXLOG_INFO("{}: {}", label_, Detail());
+  }
+
+  ProgressWindow window_;
+  std::string label_;
+  uint64_t total_bytes_ = 0;
+  uint64_t bytes_ = 0;
+  uint64_t last_draw_ms_ = 0;
+  uint64_t last_log_ms_ = 0;
+};
+
+#if REX_PLATFORM_ANDROID
+/// Test whether a path looks like an Android content:// URI.
+bool IsContentUri(const std::string& path) {
+  return path.size() > 10 && path.compare(0, 10, "content://") == 0;
+}
+#endif  // REX_PLATFORM_ANDROID
+
+/// The one candidate directory the user can actually copy files into, or empty
+/// if there is none.
+///
+/// Only the app's external files dir qualifies: `/data/data/...` is off limits
+/// without root, so naming it in a prompt is noise. The `/storage/emulated/0`
+/// prefix is shortened to `/sdcard`, because a message box has very little room
+/// (SDL's Android backend pushes its buttons off screen if the text grows) and
+/// the two are the same directory.
+std::string UserReachableAssetsHint() {
+#if REX_PLATFORM_ANDROID
+  const char* external_path = SDL_GetAndroidExternalStoragePath();
+  if (!external_path) {
+    return {};
+  }
+  std::string p = (std::filesystem::path(external_path) / "assets").string();
+  constexpr std::string_view kEmulated = "/storage/emulated/0";
+  if (p.starts_with(kEmulated)) {
+    p = "/sdcard" + p.substr(kEmulated.size());
+  }
+  return p;
+#else
+  return {};
+#endif
+}
+
+#if REX_PLATFORM_ANDROID
+
+/// Storage Access Framework tree URIs (`content://<authority>/tree/...`) name a
+/// directory, not a file, so they can neither be copied with SDL_IOFromFile nor
+/// walked with std::filesystem. Recognised only to reject them clearly.
+bool IsContentTreeUri(const std::string& path) {
+  return IsContentUri(path) && path.find("/tree/") != std::string::npos;
+}
+
+/// Copy a content:// URI to a local file using SDL_IOStream, which understands
+/// Android content URIs internally. Returns true on success.
+bool CopyContentUriToFile(const std::string& uri, const std::filesystem::path& dest) {
+  SDL_IOStream* src = SDL_IOFromFile(uri.c_str(), "rb");
+  if (!src) {
+    REXLOG_ERROR("Failed to open content URI {}: {}", uri, SDL_GetError());
+    return false;
+  }
+
+  std::filesystem::create_directories(dest.parent_path());
+  std::ofstream out(dest, std::ios::binary);
+  if (!out) {
+    SDL_CloseIO(src);
+    REXLOG_ERROR("Failed to create local file {}", dest.string());
+    return false;
+  }
+
+  // Size is known here, so this step can report a real percentage. A negative
+  // return means the stream has no size, which the reporter treats as unknown.
+  const Sint64 src_size = SDL_GetIOSize(src);
+  ProgressReporter progress("Copying game files to app storage",
+                            src_size > 0 ? static_cast<uint64_t>(src_size) : 0);
+
+  constexpr size_t kBufSize = 1 << 20;  // 1 MiB
+  auto buf = std::make_unique<char[]>(kBufSize);
+  uint64_t total = 0;
+  while (true) {
+    size_t n = SDL_ReadIO(src, buf.get(), kBufSize);
+    if (n == 0)
+      break;
+    out.write(buf.get(), static_cast<std::streamsize>(n));
+    total += n;
+    progress.AddBytes(n);
+  }
+  SDL_CloseIO(src);
+  out.close();
+
+  REXLOG_INFO("Copied content URI to {} ({} bytes)", dest.string(), total);
+  return out.good() || total > 0;
+}
+#endif  // REX_PLATFORM_ANDROID
+
+}  // namespace
 
 // =============================================================================
 // XDVDFS extraction helpers (ported from scripts/extract_game.py)
@@ -143,6 +545,10 @@ class FileReader {
     return buf == magic;
   }
 
+  /// Report bulk copies through `progress`, which every extraction path funnels
+  /// into, so one hook covers ISO, XBLA and title-update extraction.
+  void SetProgress(ProgressReporter* progress) { progress_ = progress; }
+
   /// Copy `len` bytes at `off` to `out` in chunks.
   bool CopyTo(std::ostream& out, uint64_t off, uint64_t len) {
     std::vector<char> chunk(64 * 1024);
@@ -155,6 +561,9 @@ class FileReader {
         return false;
       off += n;
       len -= n;
+      if (progress_) {
+        progress_->AddBytes(n);
+      }
     }
     return true;
   }
@@ -162,6 +571,7 @@ class FileReader {
  private:
   std::ifstream ifs_;
   uint64_t size_ = 0;
+  ProgressReporter* progress_ = nullptr;
 };
 
 // =============================================================================
@@ -211,6 +621,10 @@ std::optional<std::filesystem::path> SafeJoin(const std::filesystem::path& base,
 struct ExtractResult {
   uint32_t files = 0;
   bool complete = true;
+  /// Walk the tree without writing anything, just summing file sizes. Used for
+  /// a measuring pass so the progress bar has a real total to work against.
+  bool measure_only = false;
+  uint64_t bytes = 0;
 };
 
 // =============================================================================
@@ -311,10 +725,18 @@ void ExtractXdvdfsEntries(FileReader& reader, uint64_t game_offset, uint64_t buf
     uint64_t entry_offset = game_offset + static_cast<uint64_t>(*sector) * kXdvdfsSectorSize;
 
     if (*attributes & 0x10) {  // directory
-      std::filesystem::create_directories(*dest);
+      if (!result.measure_only) {
+        std::filesystem::create_directories(*dest);
+      }
       if (*length) {
         ExtractXdvdfsDirectory(reader, game_offset, entry_offset, *dest, depth + 1, result);
       }
+      continue;
+    }
+
+    if (result.measure_only) {
+      result.bytes += *length;
+      ++result.files;
       continue;
     }
 
@@ -361,7 +783,18 @@ uint32_t ExtractIsoTo(const std::filesystem::path& iso_path, const std::filesyst
   }
 
   std::filesystem::create_directories(out_dir);
+
+  // Measure before extracting: the walk only reads directory sectors (a few
+  // hundred KiB against a multi-gigabyte image), and it turns the progress bar
+  // from indeterminate into a real percentage.
+  ExtractResult measured;
+  measured.measure_only = true;
+  ExtractXdvdfsDirectory(reader, info->game_offset, info->root_offset, out_dir, 0, measured);
+  REXLOG_INFO("ISO holds {} files, {} bytes", measured.files, measured.bytes);
+
   ExtractResult result;
+  ProgressReporter progress("Extracting game files", measured.bytes);
+  reader.SetProgress(&progress);
   ExtractXdvdfsDirectory(reader, info->game_offset, info->root_offset, out_dir, 0, result);
 
   if (!result.complete) {
@@ -644,6 +1077,19 @@ std::optional<std::vector<std::string>> StfsEntryPath(const std::vector<StfsEntr
   return parts;
 }
 
+/// Total bytes of the regular files in an STFS package, for the progress bar.
+/// The file table is already parsed by the time this is needed, so unlike the
+/// disc path no measuring walk is required.
+uint64_t SumStfsFileBytes(const std::vector<StfsEntry>& entries) {
+  uint64_t total = 0;
+  for (const auto& entry : entries) {
+    if (!entry.is_directory) {
+      total += entry.size;
+    }
+  }
+  return total;
+}
+
 /// Extract every file in an STFS package, preserving directory layout.
 /// `skip` lets a caller exclude an entry it has already written itself.
 ExtractResult ExtractStfsTree(FileReader& reader, const std::vector<StfsEntry>& entries,
@@ -711,6 +1157,8 @@ uint32_t ExtractXblaTo(const std::filesystem::path& xbla_path,
   REXLOG_INFO("Extracting {} STFS entries from {}", entries.size(), xbla_path.string());
 
   std::filesystem::create_directories(out_dir);
+  ProgressReporter progress("Extracting game files", SumStfsFileBytes(entries));
+  reader.SetProgress(&progress);
   auto result = ExtractStfsTree(reader, entries, *info, out_dir, nullptr);
 
   if (!result.complete) {
@@ -817,6 +1265,8 @@ uint32_t ExtractTitleUpdateTo(const std::filesystem::path& tu_path,
 
   // Extract the package whole, delta patch included.
   std::filesystem::create_directories(update_dir);
+  ProgressReporter progress("Extracting title update", SumStfsFileBytes(entries));
+  reader.SetProgress(&progress);
   auto result = ExtractStfsTree(reader, entries, *info, update_dir, nullptr);
   if (!result.complete) {
     REXLOG_ERROR("TU extraction incomplete ({} files written before failure)", result.files);
@@ -1026,12 +1476,16 @@ std::filesystem::path ResolveConfigPath(const GameDataSelectorSettings& settings
   if (!settings.config_path.empty()) {
     return settings.config_path;
   }
+#if REX_PLATFORM_ANDROID
+  return GetWritableBaseDir() / "config.toml";
+#else
   auto exe_path = rex::filesystem::GetExecutablePath();
   if (exe_path.empty()) {
     REXLOG_WARN("No config_path given and the executable path is unknown; not persisting");
     return {};
   }
   return rex::filesystem::GetExecutableFolder() / (exe_path.stem().string() + ".toml");
+#endif
 }
 
 /// Write game_data_root (and update_data_root, if one is in use) back to the
@@ -1077,7 +1531,7 @@ static std::filesystem::path ResolveUpdateDir() {
   if (!udr.empty()) {
     return std::filesystem::path(udr);
   }
-  return rex::filesystem::GetExecutableFolder() / "update";
+  return GetWritableBaseDir() / "update";
 }
 
 static bool ProcessTitleUpdate(const std::filesystem::path& dir,
@@ -1217,6 +1671,25 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
     }
   }
 
+  // 1b. No usable game_data_root: look for an extraction left by an earlier run
+  // (or dropped in by hand) before asking the user for anything. On Android this
+  // is the only way an already-extracted copy can be used at all, since there is
+  // no folder picker to point at one.
+  for (const auto& candidate : GetPreExtractedCandidates()) {
+    if (!IsGameDataValid(candidate.string(), settings.default_xex_sha256)) {
+      REXLOG_INFO("No usable game data at {}", candidate.string());
+      continue;
+    }
+    REXLOG_INFO("Found already-extracted game data at {}", candidate.string());
+    dir = candidate;
+    if (!ProcessTitleUpdate(dir, settings)) {
+      return false;
+    }
+    REXCVAR_SET(game_data_root, dir.string());
+    PersistGameDataRoot(settings);
+    return true;
+  }
+
   // 2. Inform the user what's needed.
   std::string msg = "This recompilation needs the original game files.\n\n";
   if (settings.is_xbla) {
@@ -1224,17 +1697,30 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
   } else {
     msg += "Select an Xbox 360 game disc (ISO).";
   }
-  msg +=
-      "\n\nThe files will be extracted automatically.\n"
-      "Choose \"Select Folder\" instead to point at an already-extracted "
-      "directory containing default.xex.";
+  msg += "\n\nThe files will be extracted automatically.\n";
+  if (kCanPickFolder) {
+    msg +=
+        "Choose \"Select Folder\" instead to point at an already-extracted "
+        "directory containing default.xex.";
+  } else {
+    // No folder picker here, so the alternative is a path the user copies the
+    // extracted files to. Keep it to one short line: SDL's Android message box
+    // does not scroll, and a longer message pushes the buttons off screen.
+    std::string hint = UserReachableAssetsHint();
+    if (!hint.empty()) {
+      msg += "Already extracted? Copy them to\n" + hint;
+    }
+  }
 
-  const char* const main_buttons[] = {"Select File...", "Select Folder...", "Quit"};
-  int btn = ShowInfoBox("Game Files Required", msg, main_buttons);
-  if (btn != 0 && btn != 1) {
+  const char* const buttons_with_folder[] = {"Select File...", "Select Folder...", "Quit"};
+  const char* const buttons_file_only[] = {"Select File...", "Quit"};
+  const int quit_index = kCanPickFolder ? 2 : 1;
+  int btn = kCanPickFolder ? ShowInfoBox("Game Files Required", msg, buttons_with_folder)
+                           : ShowInfoBox("Game Files Required", msg, buttons_file_only);
+  if (btn < 0 || btn >= quit_index) {
     return false;
   }
-  const bool pick_folder = (btn == 1);
+  const bool pick_folder = kCanPickFolder && btn == 1;
 
   // 3. Build the native file-dialog filter list.
   // XBLA content files are extensionless, so "All files" must always be
@@ -1257,6 +1743,45 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
 
   std::filesystem::path selected_path(selected);
 
+#if REX_PLATFORM_ANDROID
+  // Android's Storage Access Framework returns content:// URIs from the file
+  // picker. These can only be read through ContentResolver, not via normal
+  // file I/O. SDL_IOFromFile understands them, so we copy the file to the
+  // app's internal storage before processing.
+  if (IsContentTreeUri(selected)) {
+    // Not reachable through the buttons above (kCanPickFolder is false here),
+    // but a tree URI reaching the file branch would otherwise be "copied" into
+    // a zero-byte file and reported as a damaged disc image.
+    REXLOG_ERROR("Got a SAF tree URI ({}), which cannot be read as a file", selected);
+    ShowErrorBox("Unsupported Selection",
+                 "Directories picked through the Android file picker cannot be "
+                 "read by the app.\n\n"
+                 "Select a disc image file instead, or copy already-extracted "
+                 "files into the app's storage folder.");
+    return false;
+  }
+  if (!std::filesystem::is_directory(selected_path) && IsContentUri(selected)) {
+    auto local_dir = GetWritableBaseDir() / "import";
+    // Derive a filename from the URI's last path segment, or fall back to a
+    // generic name.
+    std::string filename = "import.iso";
+    if (auto pos = selected.rfind('/'); pos != std::string::npos && pos + 1 < selected.size()) {
+      filename = selected.substr(pos + 1);
+    }
+    auto local_path = local_dir / filename;
+    REXLOG_INFO("Android: copying content URI to {}...", local_path.string());
+
+    // Progress is shown in a window created for the duration of the copy.
+    if (!CopyContentUriToFile(selected, local_path)) {
+      ShowErrorBox("Copy Failed",
+                   "Failed to copy the selected file to the app's storage.\n\n"
+                   "Make sure there is enough free space on the device.");
+      return false;
+    }
+    selected_path = local_path;
+  }
+#endif
+
   // Picking default.xex itself inside an extracted directory is a natural
   // mistake — treat it as selecting the directory that contains it.
   if (std::filesystem::is_regular_file(selected_path) && HasExtension(selected_path, "xex") &&
@@ -1267,10 +1792,7 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
   }
 
   // 5. Determine destination for extraction.
-  const char* base_path = SDL_GetBasePath();
-  std::filesystem::path exe_dir(base_path ? base_path : ".");
-  SDL_free(const_cast<char*>(base_path));
-  std::filesystem::path out_dir = exe_dir / "assets";
+  std::filesystem::path out_dir = GetWritableBaseDir() / "assets";
 
   // 6. Process the selection.
   if (std::filesystem::is_directory(selected_path)) {

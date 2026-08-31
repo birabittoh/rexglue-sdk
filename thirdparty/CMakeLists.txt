@@ -284,10 +284,18 @@ set(SDL_UNIX_CONSOLE_BUILD ON CACHE BOOL "" FORCE)
 # consumers may not have one to give -- Window::GetNativeWindowHandle() only
 # ever returns a real handle on Windows, so a Linux/macOS consumer creating
 # its own Vulkan surface has to go through SDL's own SDL_Vulkan_* API
-# instead, which needs this on. SDL_RENDER (SDL's own 2D renderer) is still
-# unrelated to that and stays off.
+# instead, which needs this on.
+#
+# SDL_RENDER is SDL's own 2D renderer, unrelated to the presenters. It is on
+# for exactly one reason: the game data wizard runs before the app has a
+# window or an ImGui context, and its extraction step takes minutes, so it
+# creates a throwaway window and draws a progress bar into it with
+# SDL_RenderDebugText and a couple of filled rects (see
+# rex::system::GameDataSelector). Without it that phase is a black screen.
+# On Android the bar goes through SDL's Vulkan render backend, the same API
+# the game's presenter uses afterwards.
 set(SDL_VIDEO ON CACHE BOOL "" FORCE)
-set(SDL_RENDER OFF CACHE BOOL "" FORCE)
+set(SDL_RENDER ON CACHE BOOL "" FORCE)
 set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
 set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
 set(SDL_POWER OFF CACHE BOOL "" FORCE)
@@ -310,8 +318,8 @@ set(SDL_DISKAUDIO OFF CACHE BOOL "" FORCE)
 set(SDL_DUMMYAUDIO OFF CACHE BOOL "" FORCE)
 set(SDL_DUMMYVIDEO OFF CACHE BOOL "" FORCE)
 
-# Linux audio backends
-if(UNIX AND NOT APPLE)
+# Linux audio backends (not Android — it uses OpenSL ES / AAudio via SDL3)
+if(UNIX AND NOT APPLE AND NOT ANDROID)
     set(SDL_ALSA              ON  CACHE BOOL "" FORCE)
     set(SDL_ALSA_SHARED       ON  CACHE BOOL "" FORCE)
     set(SDL_PULSEAUDIO        ON  CACHE BOOL "" FORCE)

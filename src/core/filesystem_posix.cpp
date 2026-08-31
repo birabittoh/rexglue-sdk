@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <fstream>
 #include <iostream>
 
 #include <fcntl.h>
@@ -23,6 +24,7 @@
 #include <rex/assert.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
+#include <rex/platform.h>
 #include <rex/platform/env.h>
 #include <rex/string.h>
 
@@ -59,10 +61,38 @@ std::filesystem::path GetExecutablePath() {
 }
 
 std::filesystem::path GetExecutableFolder() {
+#if REX_PLATFORM_ANDROID
+  // On Android /proc/self/exe points to /system/bin/app_process64, which is
+  // meaningless for app-relative paths. Return the app's internal files
+  // directory instead — this is where configs, logs, and sidecar files live.
+  return GetUserFolder();
+#else
   return GetExecutablePath().parent_path();
+#endif
 }
 
 std::filesystem::path GetUserFolder() {
+#if REX_PLATFORM_ANDROID
+  // On Android, the app's internal data directory is always at
+  // /data/data/<package>/files/ (or /data/user/0/<package>/files/ on
+  // multi-user devices, which is a symlink to the same place).
+  // We can't use SDL_GetPrefPath here because rexcore doesn't link SDL3.
+  // Instead, read the path from /proc/self/cmdline (which gives the
+  // package name on Android) and derive the internal storage path.
+  std::string package;
+  if (std::ifstream f("/proc/self/cmdline"); f) {
+    std::getline(f, package, '\0');
+  }
+  if (!package.empty()) {
+    return std::filesystem::path("/data/data") / package / "files";
+  }
+  // Fallback: HOME is usually set to the app's data directory by the
+  // Android runtime.
+  if (auto home = rex::platform::env::get("HOME")) {
+    return std::filesystem::path(*home);
+  }
+  return "/data/local/tmp";
+#endif
   // get preferred data home
   if (auto xdg = rex::platform::env::get("XDG_DATA_HOME")) {
     return std::filesystem::path(*xdg);
@@ -257,3 +287,29 @@ std::vector<FileInfo> ListFiles(const std::filesystem::path& path) {
 
 }  // namespace filesystem
 }  // namespace rex
+
+#if REX_PLATFORM_ANDROID
+
+namespace rex::filesystem {
+
+void AndroidInitialize() {
+  // TODO: Initialize JNI access to ContentResolver if needed.
+}
+
+void AndroidShutdown() {
+  // TODO: Release JNI references.
+}
+
+bool IsAndroidContentUri(const std::string_view source) {
+  return source.starts_with("content://");
+}
+
+int OpenAndroidContentFileDescriptor(const std::string_view /*uri*/, const char* /*mode*/) {
+  // TODO: Implement via JNI ContentResolver.openFileDescriptor().
+  // For now, return -1 (error) so callers fall back to normal file I/O.
+  return -1;
+}
+
+}  // namespace rex::filesystem
+
+#endif  // REX_PLATFORM_ANDROID

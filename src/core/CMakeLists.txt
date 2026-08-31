@@ -58,7 +58,6 @@ elseif(UNIX)
         dynlib_posix.cpp
         exception_handler_posix.cpp
         filesystem_posix.cpp
-        fiber_posix.cpp
         mapped_memory_posix.cpp
         math_gcc.cpp
         memory_posix.cpp
@@ -69,13 +68,27 @@ elseif(UNIX)
         socket_posix.cpp
         system_posix.cpp
         threading_posix.cpp
-        net/http_curl.cpp
     )
-    # Linked directly (not vendored) per the mod-catalog HTTP client design:
-    # this fails configure loudly on a Linux box missing libcurl dev headers
-    # rather than silently shipping a build with no catalog support.
-    find_package(CURL REQUIRED)
-    target_link_libraries(rexcore PUBLIC CURL::libcurl)
+    if(ANDROID)
+        # Android's Bionic lacks getcontext/makecontext/swapcontext.
+        target_sources(rexcore PRIVATE fiber_android.cpp)
+    else()
+        target_sources(rexcore PRIVATE fiber_posix.cpp)
+    endif()
+    if(ANDROID)
+        # Android (Bionic) doesn't ship libcurl. Stub out the HTTP client; the
+        # mod catalog won't work on Android until a Java/JNI HTTP backend is
+        # added. Android's Bionic bundles librt into libc, so no separate -lrt.
+        target_sources(rexcore PRIVATE net/http_stub.cpp)
+        target_link_libraries(rexcore PRIVATE log)
+    else()
+        target_sources(rexcore PRIVATE net/http_curl.cpp)
+        # Linked directly (not vendored) per the mod-catalog HTTP client design:
+        # this fails configure loudly on a Linux box missing libcurl dev headers
+        # rather than silently shipping a build with no catalog support.
+        find_package(CURL REQUIRED)
+        target_link_libraries(rexcore PUBLIC CURL::libcurl)
+    endif()
 endif()
 
 # Xenos data-format layer (stateless; headers under include/rex/graphics/).
@@ -101,7 +114,10 @@ target_include_directories(rexcore PRIVATE
     ${PROJECT_SOURCE_DIR}/thirdparty/cli11/include
 )
 
-if(UNIX)
+if(ANDROID)
+    # Bionic bundles POSIX real-time functions into libc; only dl is separate.
+    target_link_libraries(rexcore PRIVATE dl)
+elseif(UNIX)
     target_link_libraries(rexcore PRIVATE pthread rt dl)
 endif()
 
