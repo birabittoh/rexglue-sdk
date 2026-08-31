@@ -32,6 +32,57 @@
 
 namespace rex::string {
 
+// libc++ in Android NDK does not implement std::from_chars for floating-point
+// types. Provide a wrapper that falls back to strtof/strtod when needed.
+namespace detail {
+
+#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
+// Standard from_chars for floats is available.
+inline std::from_chars_result from_chars_float(const char* first, const char* last, float& value,
+                                               std::chars_format fmt = std::chars_format::general) {
+  return std::from_chars(first, last, value, fmt);
+}
+inline std::from_chars_result from_chars_float(const char* first, const char* last, double& value,
+                                               std::chars_format fmt = std::chars_format::general) {
+  return std::from_chars(first, last, value, fmt);
+}
+#else
+// Fallback via strtof/strtod. NUL-terminate the range in a small buffer.
+inline std::from_chars_result from_chars_float(const char* first, const char* last, float& value,
+                                               std::chars_format = std::chars_format::general) {
+  // strtof needs a NUL-terminated string.
+  char buf[128];
+  size_t len = size_t(last - first);
+  if (len >= sizeof(buf))
+    len = sizeof(buf) - 1;
+  std::memcpy(buf, first, len);
+  buf[len] = '\0';
+  char* end = nullptr;
+  float v = std::strtof(buf, &end);
+  if (end == buf)
+    return {first, std::errc::invalid_argument};
+  value = v;
+  return {first + (end - buf), std::errc{}};
+}
+inline std::from_chars_result from_chars_float(const char* first, const char* last, double& value,
+                                               std::chars_format = std::chars_format::general) {
+  char buf[128];
+  size_t len = size_t(last - first);
+  if (len >= sizeof(buf))
+    len = sizeof(buf) - 1;
+  std::memcpy(buf, first, len);
+  buf[len] = '\0';
+  char* end = nullptr;
+  double v = std::strtod(buf, &end);
+  if (end == buf)
+    return {first, std::errc::invalid_argument};
+  value = v;
+  return {first + (end - buf), std::errc{}};
+}
+#endif
+
+}  // namespace detail
+
 inline std::string to_hex_string(uint32_t value) {
   return fmt::format("{:08X}", value);
 }
@@ -192,8 +243,8 @@ inline T fpfs(const std::string_view value, bool force_hex) {
 #if REX_PLATFORM_MAC
     auto [p, error] = portable_float_from_chars(range.data(), range.data() + range.size(), result);
 #else
-    auto [p, error] = std::from_chars(range.data(), range.data() + range.size(), result,
-                                      std::chars_format::general);
+    auto [p, error] = detail::from_chars_float(range.data(), range.data() + range.size(), result,
+                                               std::chars_format::general);
 #endif
     // TODO(gibbed): do something more with errors?
     if (error != std::errc()) {
@@ -317,9 +368,9 @@ inline vec128_t from_string<vec128_t>(const std::string_view value, bool force_h
         return vec128_t();
       }
 #if REX_PLATFORM_MAC
-      auto result = detail::portable_float_from_chars(p, end, v.f32[i]);
+      auto result = portable_float_from_chars(p, end, v.f32[i]);
 #else
-      auto result = std::from_chars(p, end, v.f32[i], std::chars_format::general);
+      auto result = detail::from_chars_float(p, end, v.f32[i], std::chars_format::general);
 #endif
       if (result.ec != std::errc()) {
         assert_always();

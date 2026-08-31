@@ -21,6 +21,7 @@
 #include <rex/filesystem/devices/null_device.h>
 #include <rex/filesystem/vfs.h>
 #include <rex/logging.h>
+#include <rex/memory/utils.h>
 #include <rex/perf/counter.h>
 #include <rex/ppc/context.h>          // PPCFuncMapping
 #include <rex/platform/exceptions.h>  // SEH exception support
@@ -113,6 +114,16 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
     return X_STATUS_UNSUCCESSFUL;
   }
   instance_ = this;
+
+#if REX_PLATFORM_ANDROID
+  // Initialize Android-specific subsystem hooks (ASharedMemory, threading
+  // primitives, JNI content resolver stubs) before anything that depends on
+  // them. These were defined but never called — without the memory init,
+  // ASharedMemory_create is null and the 4 GB guest reservation fails.
+  rex::memory::AndroidInitialize();
+  rex::thread::AndroidInitialize();
+  rex::filesystem::AndroidInitialize();
+#endif
 
   auto fail = [this](X_STATUS status, std::string_view reason) {
     REXSYS_ERROR("Runtime::Setup failed: {}", reason);

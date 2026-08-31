@@ -114,6 +114,22 @@ using XSystemClock = detail::NtSystemClock<detail::Domain::Guest>;
 }  // namespace chrono
 }  // namespace rex
 
+// Detect whether the standard library provides std::chrono::clock_time_conversion.
+// libc++ (NDK, older LLVM) exposes __cpp_lib_chrono <= 201611L which lacks it;
+// libstdc++ (GCC 11+, desktop Clang with libstdc++) and MSVC STL do provide it.
+#if __has_include(<version>)
+#include <version>
+#endif
+#if defined(__cpp_lib_chrono) && __cpp_lib_chrono >= 201907L
+#define REX_HAS_STD_CLOCK_CAST 1
+#else
+#define REX_HAS_STD_CLOCK_CAST 0
+#endif
+
+#if REX_HAS_STD_CLOCK_CAST
+
+// Standard library has clock_time_conversion — specialise in std::chrono as
+// before and use std::chrono::clock_cast throughout.
 namespace std::chrono {
 
 #ifdef __APPLE__
@@ -135,7 +151,6 @@ struct clock_time_conversion<::rex::chrono::WinSystemClock, ::rex::chrono::XSyst
   template <typename Duration>
   typename WClock_::time_point operator()(
       const std::chrono::time_point<XClock_, Duration>& t) const {
-    // Consult chrono_steady_cast.h for explanation on this:
     std::atomic_thread_fence(std::memory_order_acq_rel);
     auto w_now = WClock_::now();
     auto x_now = XClock_::now();
@@ -158,7 +173,6 @@ struct clock_time_conversion<::rex::chrono::XSystemClock, ::rex::chrono::WinSyst
   template <typename Duration>
   typename XClock_::time_point operator()(
       const std::chrono::time_point<WClock_, Duration>& t) const {
-    // Consult chrono_steady_cast.h for explanation on this:
     std::atomic_thread_fence(std::memory_order_acq_rel);
     auto w_now = WClock_::now();
     auto x_now = XClock_::now();
@@ -174,3 +188,69 @@ struct clock_time_conversion<::rex::chrono::XSystemClock, ::rex::chrono::WinSyst
 };
 
 }  // namespace std::chrono
+
+namespace rex::chrono {
+// Delegate to the standard clock_cast.
+using std::chrono::clock_cast;
+}  // namespace rex::chrono
+
+#else  // !REX_HAS_STD_CLOCK_CAST — polyfill for libc++ / NDK
+
+namespace rex::chrono {
+
+// Minimal clock_time_conversion polyfill, only for the two custom clock pairs
+// that the SDK actually uses.
+template <typename DestClock, typename SourceClock>
+struct clock_time_conversion;
+
+template <>
+struct clock_time_conversion<WinSystemClock, XSystemClock> {
+  using WClock_ = WinSystemClock;
+  using XClock_ = XSystemClock;
+
+  template <typename Duration>
+  typename WClock_::time_point operator()(
+      const std::chrono::time_point<XClock_, Duration>& t) const {
+    std::atomic_thread_fence(std::memory_order_acq_rel);
+    auto w_now = WClock_::now();
+    auto x_now = XClock_::now();
+    std::atomic_thread_fence(std::memory_order_acq_rel);
+
+    auto delta = (t - x_now);
+    if (!REXCVAR_GET(clock_no_scaling)) {
+      delta = std::chrono::floor<WClock_::duration>(delta * Clock::guest_time_scalar());
+    }
+    return w_now + delta;
+  }
+};
+
+template <>
+struct clock_time_conversion<XSystemClock, WinSystemClock> {
+  using WClock_ = WinSystemClock;
+  using XClock_ = XSystemClock;
+
+  template <typename Duration>
+  typename XClock_::time_point operator()(
+      const std::chrono::time_point<WClock_, Duration>& t) const {
+    std::atomic_thread_fence(std::memory_order_acq_rel);
+    auto w_now = WClock_::now();
+    auto x_now = XClock_::now();
+    std::atomic_thread_fence(std::memory_order_acq_rel);
+
+    hundrednanoseconds delta = (t - w_now);
+    if (!REXCVAR_GET(clock_no_scaling)) {
+      delta = std::chrono::floor<WClock_::duration>(delta / Clock::guest_time_scalar());
+    }
+    return x_now + delta;
+  }
+};
+
+// Minimal clock_cast: look up the conversion via clock_time_conversion.
+template <typename DestClock, typename SourceClock, typename Duration>
+auto clock_cast(const std::chrono::time_point<SourceClock, Duration>& tp) {
+  return clock_time_conversion<DestClock, SourceClock>{}(tp);
+}
+
+}  // namespace rex::chrono
+
+#endif  // REX_HAS_STD_CLOCK_CAST

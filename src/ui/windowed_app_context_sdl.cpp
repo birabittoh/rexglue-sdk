@@ -48,6 +48,8 @@ bool SDLWindowedAppContext::Initialize() {
   if (requested_driver.empty()) {
     requested_driver = "cocoa";
   }
+#elif REX_PLATFORM_ANDROID
+  // Android: let SDL use its native video driver; x11 does not exist here.
 #elif !REX_PLATFORM_WIN32
   // RenderDoc cannot capture or present on Wayland; when injection is
   // requested and the user hasn't already picked a driver, run through
@@ -177,6 +179,15 @@ void SDLWindowedAppContext::ProcessEvent(SDL_Event& event) {
     case SDL_EVENT_MOUSE_WHEEL: {
       if (WindowSDL* window = GetWindow(event.wheel.windowID)) {
         window->HandleMouseEvent(event);
+      }
+      break;
+    }
+    case SDL_EVENT_FINGER_DOWN:
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_MOTION:
+    case SDL_EVENT_FINGER_CANCELED: {
+      if (WindowSDL* window = GetWindowOrSole(event.tfinger.windowID)) {
+        window->HandleTouchEvent(event);
       }
       break;
     }

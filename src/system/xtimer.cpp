@@ -9,6 +9,8 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <algorithm>
+
 #include <rex/chrono/chrono.h>
 #include <rex/chrono/clock.h>
 #include <rex/logging.h>
@@ -59,9 +61,21 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms, uint32_t routine
     // Any timer implementation uses absolute times eventually, convert as early
     // as possible for increased accuracy
     auto after = rex::chrono::hundrednanoseconds(-due_time);
-    due_tp = std::chrono::clock_cast<WinSystemClock>(XSystemClock::now() + after);
+    due_tp = rex::chrono::clock_cast<WinSystemClock>(XSystemClock::now() + after);
   } else {
-    due_tp = std::chrono::clock_cast<WinSystemClock>(XSystemClock::from_file_time(due_time));
+    // An absolute guest due time that has already passed means "expire
+    // immediately"; games rely on that, and pass 0 (the 1601 FILETIME epoch) to
+    // arm a periodic timer that starts right away. Clamp here, while still in
+    // the guest wall-clock domain, rather than handing a 400-years-ago instant
+    // to a host backend: converting it to a steady clock has to express the
+    // difference in nanoseconds, which does not fit in the int64 that
+    // steady_clock::duration is, so it wraps to a due time centuries in the
+    // future and the timer simply never fires. Windows escapes that because its
+    // backend stays in FILETIME and lets the OS treat 0 as already expired,
+    // which is why this only ever showed up off Windows.
+    auto guest_due = XSystemClock::from_file_time(due_time);
+    auto guest_now = XSystemClock::now();
+    due_tp = rex::chrono::clock_cast<WinSystemClock>(std::max(guest_due, guest_now));
   }
 
   // Stash routine for callback.

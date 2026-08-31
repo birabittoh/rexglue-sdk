@@ -294,8 +294,16 @@ set(SDL_UNIX_CONSOLE_BUILD ON CACHE BOOL "" FORCE)
 # consumers may not have one to give; Window::GetNativeWindowHandle() only
 # ever returns a real handle on Windows, so a Linux/macOS consumer creating
 # its own Vulkan surface has to go through SDL's own SDL_Vulkan_* API
-# instead, which needs this on. SDL_RENDER (SDL's own 2D renderer) is still
-# unrelated to that and stays off.
+# instead, which needs this on.
+#
+# SDL_RENDER is SDL's own 2D renderer, unrelated to the presenters. It is on
+# for exactly one reason: the game data wizard runs before the app has a
+# window or an ImGui context, and its extraction step takes minutes, so it
+# creates a throwaway window and draws a progress bar into it with
+# SDL_RenderDebugText and a couple of filled rects (see
+# rex::system::GameDataSelector). Without it that phase is a black screen.
+# On Android the bar goes through SDL's Vulkan render backend, the same API
+# the game's presenter uses afterwards.
 set(SDL_VIDEO ON CACHE BOOL "" FORCE)
 if(APPLE)
     # macOS uses SDL for windowing + Metal/Vulkan surface creation.
@@ -311,7 +319,7 @@ else()
         set(SDL_VULKAN OFF CACHE BOOL "" FORCE)
     endif()
 endif()
-set(SDL_RENDER OFF CACHE BOOL "" FORCE)
+set(SDL_RENDER ON CACHE BOOL "" FORCE)
 set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
 set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
 set(SDL_POWER OFF CACHE BOOL "" FORCE)
@@ -332,9 +340,10 @@ set(SDL_DISKAUDIO OFF CACHE BOOL "" FORCE)
 set(SDL_DUMMYAUDIO OFF CACHE BOOL "" FORCE)
 set(SDL_DUMMYVIDEO OFF CACHE BOOL "" FORCE)
 
-# Linux video and audio backends. Both video drivers are always built so the
-# one in use stays a runtime choice.
-if(UNIX AND NOT APPLE)
+# Linux video and audio backends (not Android; it uses OpenSL ES / AAudio via
+# SDL3 and its own native video driver). Both video drivers are always built
+# so the one in use stays a runtime choice.
+if(UNIX AND NOT APPLE AND NOT ANDROID)
     set(SDL_X11               ON  CACHE BOOL "" FORCE)
     set(SDL_WAYLAND           ON  CACHE BOOL "" FORCE)
     set(SDL_ALSA              ON  CACHE BOOL "" FORCE)

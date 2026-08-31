@@ -75,14 +75,21 @@ endfunction()
 #     so this single copy handles them transitively.
 #==========================================================
 function(rexglue_configure_target target_name)
-    cmake_parse_arguments(ARG "" "" "GPU_PLUGINS" ${ARGN})
+    cmake_parse_arguments(ARG "" "APP_ID" "GPU_PLUGINS" ${ARGN})
 
     target_sources(${target_name} PRIVATE
         ${REXGLUE_SHARE_DIR}/windowed_app_main_sdl.cpp
         ${REXGLUE_SHARE_DIR}/rex_app.cpp)
 
+    # Identifier the app registers itself under (REX_DEFINE_APP). Defaults to
+    # the target name, which the init template makes equal to the identifier.
+    if(NOT ARG_APP_ID)
+        set(ARG_APP_ID "${target_name}")
+    endif()
+
     target_compile_definitions(${target_name} PRIVATE
-        REXGLUE_BUILD_CONFIG="$<CONFIG>")
+        REXGLUE_BUILD_CONFIG="$<CONFIG>"
+        REXGLUE_APP_ID="${ARG_APP_ID}")
 
     if(UNIX AND NOT APPLE)
         set_target_properties(${target_name} PROPERTIES
