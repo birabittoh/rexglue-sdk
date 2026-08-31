@@ -30,6 +30,8 @@
 
 #if REX_PLATFORM_WIN32
 #include <rex/ui/surface_win.h>
+#elif REX_PLATFORM_ANDROID
+#include <rex/ui/surface_android.h>
 #else
 #include <X11/Xlib-xcb.h>
 #include <rex/ui/surface_gnulinux.h>
@@ -131,6 +133,27 @@ WindowSDL::~WindowSDL() {
 bool WindowSDL::OpenImpl() {
   // SDL window coordinates are physical pixels on Windows and X11.
   SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN;
+#if REX_PLATFORM_ANDROID
+  // Android has no window manager to resize against: the activity owns the
+  // whole display, and SDL's Java glue derives the requested screen
+  // orientation from the window rather than from the manifest. A resizable
+  // window makes SDLActivity.setOrientation() ask for
+  // SCREEN_ORIENTATION_FULL_USER, which overrides the manifest's
+  // sensorLandscape and lets the activity rotate to portrait. Without the flag
+  // it derives the orientation from the created window's aspect, which is
+  // landscape here.
+  flags &= ~SDL_WindowFlags(SDL_WINDOW_RESIZABLE);
+  // Belt and braces: this hint is consulted ahead of the window aspect and
+  // survives any later resize.
+  SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+  // Fullscreen is not a choice here, so the `fullscreen` cvar does not apply.
+  // The activity always fills the display; what a non-fullscreen SDL window
+  // actually selects is whether the status and navigation bars are drawn on
+  // top of the game, and nothing wants them there. SDL only touches the
+  // Android window style from Android_SetWindowFullscreen, so this flag is
+  // also what gets the bars hidden in the first place.
+  flags |= SDL_WINDOW_FULLSCREEN;
+#endif
   sdl_window_ = SDL_CreateWindow(GetTitle().c_str(), int(SizeToPhysical(GetDesiredLogicalWidth())),
                                  int(SizeToPhysical(GetDesiredLogicalHeight())), flags);
   if (!sdl_window_) {
@@ -267,7 +290,13 @@ void WindowSDL::ApplyNewFullscreen() {
   if (!sdl_window_) {
     return;
   }
+#if REX_PLATFORM_ANDROID
+  // Leaving fullscreen would only hand the display back to the system bars;
+  // see the flags in OpenImpl.
+  SDL_SetWindowFullscreen(sdl_window_, true);
+#else
   SDL_SetWindowFullscreen(sdl_window_, IsFullscreen());
+#endif
 }
 
 void WindowSDL::ApplyNewTitle() {
@@ -420,6 +449,15 @@ std::unique_ptr<Surface> WindowSDL::CreateSurfaceImpl(Surface::TypeFlags allowed
     }
   }
 #else
+#if REX_PLATFORM_ANDROID
+  if (allowed_types & Surface::kTypeFlag_AndroidNativeWindow) {
+    ANativeWindow* native_window = static_cast<ANativeWindow*>(
+        SDL_GetPointerProperty(props, SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr));
+    if (native_window) {
+      return std::make_unique<AndroidNativeWindowSurface>(native_window, sdl_window_);
+    }
+  }
+#else
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
   if (allowed_types & Surface::kTypeFlag_WaylandSurface) {
     auto* wl_display_ptr = static_cast<struct wl_display*>(
@@ -440,6 +478,7 @@ std::unique_ptr<Surface> WindowSDL::CreateSurfaceImpl(Surface::TypeFlags allowed
       return std::make_unique<XcbWindowSurface>(XGetXCBConnection(display), x11_window);
     }
   }
+#endif  // REX_PLATFORM_ANDROID
 #endif
   return nullptr;
 }
@@ -604,6 +643,47 @@ void WindowSDL::HandleMouseEvent(SDL_Event& event) {
     default:
       break;
   }
+}
+
+void WindowSDL::HandleTouchEvent(SDL_Event& event) {
+  // SDL reports finger positions normalized to the window; listeners work in
+  // physical pixels, the same space the mouse events above are delivered in.
+  int pixel_width = 0;
+  int pixel_height = 0;
+  if (sdl_window_) {
+    SDL_GetWindowSizeInPixels(sdl_window_, &pixel_width, &pixel_height);
+  }
+
+  TouchEvent::Action action;
+  switch (event.type) {
+    case SDL_EVENT_FINGER_DOWN:
+      action = TouchEvent::Action::kDown;
+      break;
+    case SDL_EVENT_FINGER_UP:
+      action = TouchEvent::Action::kUp;
+      break;
+    case SDL_EVENT_FINGER_CANCELED:
+      action = TouchEvent::Action::kCancel;
+      break;
+    case SDL_EVENT_FINGER_MOTION:
+      action = TouchEvent::Action::kMove;
+      break;
+    default:
+      return;
+  }
+
+  // SDL_FingerID is 64-bit; TouchEvent identifies pointers with 32 bits. The
+  // low half is what actually varies between concurrent fingers on every
+  // backend here, and ids only need to be distinct among fingers down at once.
+  uint32_t pointer_id = uint32_t(uint64_t(event.tfinger.fingerID));
+  if (pointer_id == TouchEvent::kPointerIDNone) {
+    pointer_id = 0;
+  }
+
+  WindowDestructionReceiver destruction_receiver(this);
+  TouchEvent e(this, pointer_id, action, event.tfinger.x * float(pixel_width),
+               event.tfinger.y * float(pixel_height));
+  OnTouchEvent(e, destruction_receiver);
 }
 
 }  // namespace rex::ui

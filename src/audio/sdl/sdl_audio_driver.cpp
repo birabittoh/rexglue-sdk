@@ -52,12 +52,31 @@ bool SDLAudioDriver::Initialize() {
   }
   sdl_initialized_ = true;
 
+  // Pick the channel count from the device *before* opening it. The spec handed to
+  // SDL_OpenAudioDeviceStream() is what the physical device gets opened with when nothing
+  // else has claimed it, so asking for 5.1 up front and inspecting the result afterwards
+  // only tells us what we asked for. WASAPI happens to overrule the request with the real
+  // mix format, which is why querying after the open used to work on Windows, but AAudio
+  // hands back a 6 channel stream on a stereo phone speaker: Android builds an index
+  // channel mask (0x8000003F) for it, which its mixer will not fold down to the speaker,
+  // so every frame we submit is dropped and the game plays silently.
+  SDL_AudioSpec device_spec = {};
+  uint8_t device_channels = 2;
+  if (SDL_GetAudioDeviceFormat(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &device_spec, NULL)) {
+    // 5.1 only when the device really has the speakers for it; anything else gets the
+    // stereo downmix, which is also the only other layout conversion.h can produce.
+    device_channels = device_spec.channels >= static_cast<int>(frame_channels_)
+                          ? static_cast<uint8_t>(frame_channels_)
+                          : uint8_t{2};
+  } else {
+    REXAPU_WARN("SDL_GetAudioDeviceFormat() failed, assuming stereo output: {}", SDL_GetError());
+  }
+
   SDL_AudioSpec desired_spec = {};
-  SDL_AudioSpec obtained_spec = {};
   desired_spec.freq = frame_frequency_;
   desired_spec.format = SDL_AUDIO_F32LE;
-  desired_spec.channels = frame_channels_;
-  sdl_device_channels_ = frame_channels_;
+  desired_spec.channels = device_channels;
+  sdl_device_channels_ = device_channels;
   sdl_stream_ = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &desired_spec,
                                           SDLCallback, this);
   if (!sdl_stream_) {
@@ -71,27 +90,13 @@ bool SDLAudioDriver::Initialize() {
     return false;
   }
 
-  if (!SDL_GetAudioDeviceFormat(sdl_device, &obtained_spec, NULL)) {
-    REXAPU_WARN("SDL_GetAudioDeviceFormat() failed: {}", SDL_GetError());
-    obtained_spec = desired_spec;
-  }
-
-  if (obtained_spec.channels == 2) {
-    SDL_DestroyAudioStream(sdl_stream_);
-    sdl_stream_ = nullptr;
-    desired_spec.channels = 2;
-    sdl_device_channels_ = 2;
-    sdl_stream_ = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &desired_spec,
-                                            SDLCallback, this);
-    if (!sdl_stream_) {
-      REXAPU_ERROR("SDL_OpenAudioDeviceStream() stereo fallback failed: {}", SDL_GetError());
-      return false;
-    }
-    sdl_device = SDL_GetAudioStreamDevice(sdl_stream_);
-    if (!sdl_device) {
-      REXAPU_ERROR("SDL_GetAudioStreamDevice() failed after stereo fallback: {}", SDL_GetError());
-      return false;
-    }
+  // The backend can still land on a layout of its own choosing. SDL resamples and remaps
+  // between the stream and the device, so the only thing that has to agree with the device
+  // is our own conversion step, and that is driven by what we asked for, not by this.
+  SDL_AudioSpec obtained_spec = {};
+  if (SDL_GetAudioDeviceFormat(sdl_device, &obtained_spec, NULL)) {
+    REXAPU_INFO("Audio device opened: {} Hz, {} channels (submitting {} channels)",
+                obtained_spec.freq, obtained_spec.channels, sdl_device_channels_);
   }
 
   if (!SDL_ResumeAudioDevice(sdl_device)) {
@@ -116,13 +121,6 @@ void SDLAudioDriver::SubmitFrame(uint32_t frame_ptr) {
   }
 
   std::memcpy(output_frame, input_frame, frame_samples_ * sizeof(float));
-
-  static uint32_t sdl_submit_count = 0;
-  if (sdl_submit_count < 10) {
-    REXAPU_DEBUG("SDLAudioDriver::SubmitFrame: frame_ptr={:08X} queued_count={}", frame_ptr,
-                 frames_queued_.size() + 1);
-    sdl_submit_count++;
-  }
 
   {
     std::unique_lock<std::mutex> guard(frames_mutex_);

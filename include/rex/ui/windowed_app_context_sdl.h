@@ -50,6 +50,16 @@ class SDLWindowedAppContext final : public WindowedAppContext {
     return it != windows_.end() ? it->second : nullptr;
   }
 
+  // Touch events do not always carry a window id (Android reports 0 when the
+  // finger isn't attributed to a window), so fall back to the only window when
+  // there is exactly one -- the single-window case every app here runs in.
+  WindowSDL* GetWindowOrSole(SDL_WindowID id) const {
+    if (WindowSDL* window = GetWindow(id)) {
+      return window;
+    }
+    return windows_.size() == 1 ? windows_.begin()->second : nullptr;
+  }
+
   void ProcessEvent(SDL_Event& event);
 
   std::unordered_map<SDL_WindowID, WindowSDL*> windows_;

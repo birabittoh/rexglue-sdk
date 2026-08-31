@@ -34,7 +34,9 @@ SDLWindowedAppContext::~SDLWindowedAppContext() {
 }
 
 bool SDLWindowedAppContext::Initialize() {
-#if !REX_PLATFORM_WIN32 && !defined(VK_USE_PLATFORM_WAYLAND_KHR)
+#if REX_PLATFORM_ANDROID
+  // Android: let SDL use its native video driver; x11 does not exist here.
+#elif !REX_PLATFORM_WIN32 && !defined(VK_USE_PLATFORM_WAYLAND_KHR)
   SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11");
 #elif !REX_PLATFORM_WIN32
   // RenderDoc cannot capture or present on Wayland; when injection is
@@ -131,6 +133,15 @@ void SDLWindowedAppContext::ProcessEvent(SDL_Event& event) {
     case SDL_EVENT_MOUSE_WHEEL: {
       if (WindowSDL* window = GetWindow(event.wheel.windowID)) {
         window->HandleMouseEvent(event);
+      }
+      break;
+    }
+    case SDL_EVENT_FINGER_DOWN:
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_MOTION:
+    case SDL_EVENT_FINGER_CANCELED: {
+      if (WindowSDL* window = GetWindowOrSole(event.tfinger.windowID)) {
+        window->HandleTouchEvent(event);
       }
       break;
     }

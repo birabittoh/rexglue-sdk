@@ -25,6 +25,10 @@
 #include <rex/ui/windowed_app.h>
 #include <rex/ui/windowed_app_context_sdl.h>
 
+#ifndef REXGLUE_APP_ID
+#define REXGLUE_APP_ID "app"
+#endif
+
 #if REX_PLATFORM_WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -48,7 +52,20 @@ int RunWindowedApp(int argc, char** argv) {
   {
     rex::ui::SDLWindowedAppContext app_context;
 
-    std::unique_ptr<rex::ui::WindowedApp> app = rex::ui::GetWindowedAppCreator()(app_context);
+    rex::ui::WindowedApp::Creator creator = nullptr;
+#if XE_UI_WINDOWED_APPS_IN_LIBRARY
+    // Android builds register apps by identifier instead of exposing a single
+    // GetWindowedAppCreator(). Find the one this executable implements.
+    creator = rex::ui::WindowedApp::GetCreator(REXGLUE_APP_ID);
+    if (!creator) {
+      REXLOG_ERROR("No windowed app registered with identifier '{}'", REXGLUE_APP_ID);
+      return EXIT_FAILURE;
+    }
+#else
+    creator = rex::ui::GetWindowedAppCreator();
+#endif
+
+    std::unique_ptr<rex::ui::WindowedApp> app = creator(app_context);
 
     // Load the app's config file before the context initializes SDL: cvars
     // like renderdoc_enabled influence the video driver choice, and the app's
@@ -117,6 +134,14 @@ std::vector<std::string> WideArgsToUtf8(int argc, wchar_t** wargv) {
 #endif
 
 }  // namespace
+
+// On Android, SDL3's Java layer (SDLActivity) loads the app's shared library
+// and calls SDL_main via dlsym.  Including SDL_main.h rewrites the main()
+// definition below to SDL_main() and marks it with __attribute__((visibility
+// ("default"))) so the symbol is exported from the .so.
+#if REX_PLATFORM_ANDROID
+#include <SDL3/SDL_main.h>
+#endif
 
 #if REX_PLATFORM_WIN32
 
