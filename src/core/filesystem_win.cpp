@@ -69,7 +69,7 @@ std::filesystem::path GetExecutableFolder() {
 std::filesystem::path GetUserFolder() {
   std::filesystem::path result;
   PWSTR path;
-  if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_DEFAULT, nullptr, &path))) {
+  if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_CREATE, nullptr, &path))) {
     result.assign(path);
     CoTaskMemFree(path);
   }

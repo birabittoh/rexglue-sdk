@@ -304,6 +304,19 @@ bool ReXApp::SetupEnvironment() {
     REXLOG_INFO("  Metadata root:  {}", metadata_root_.string());
   }
 
+  if (!user_data_root_.empty() && !std::filesystem::is_directory(user_data_root_)) {
+    std::error_code ec;
+    std::filesystem::create_directories(user_data_root_, ec);
+    if (ec) {
+      auto msg = fmt::format(
+          "Could not create the user data folder at {}: {}. Settings and saves will not "
+          "persist this session.",
+          user_data_root_.string(), ec.message());
+      REXLOG_ERROR("{}", msg);
+      rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Warning, msg);
+    }
+  }
+
   return true;
 }
 
