@@ -285,6 +285,10 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   /// Set a callback that provides guest frame stats to the debug overlay.
   void SetGuestFrameStats(ui::DebugOverlayDialog::FrameStatsProvider provider);
 
+  /// Set a callback that draws extra ImGui rows in the debug overlay, below the
+  /// frame rate graphs. For numbers only the app can measure.
+  void SetDebugOverlayDetails(ui::DebugOverlayDialog::DetailProvider provider);
+
   // Overrides the shader debugger overlay's (F2) data source.
   struct ShaderDebuggerOverride {
     ui::ShaderDebuggerDialog::SnapshotProvider snapshot_provider;
@@ -361,6 +365,7 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   std::unique_ptr<ui::HintToastDialog> hint_toast_;
   std::unique_ptr<ui::ShaderDebuggerDialog> shader_debugger_overlay_;
   ui::DebugOverlayDialog::FrameStatsProvider frame_stats_provider_;
+  ui::DebugOverlayDialog::DetailProvider frame_detail_provider_;
   ShaderDebuggerOverride shader_debugger_override_;
   std::filesystem::path config_path_;
 

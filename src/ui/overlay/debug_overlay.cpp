@@ -19,8 +19,11 @@
 
 namespace rex::ui {
 
-DebugOverlayDialog::DebugOverlayDialog(ImGuiDrawer* imgui_drawer, FrameStatsProvider stats_provider)
-    : ImGuiDialog(imgui_drawer), stats_provider_(std::move(stats_provider)) {}
+DebugOverlayDialog::DebugOverlayDialog(ImGuiDrawer* imgui_drawer, FrameStatsProvider stats_provider,
+                                       DetailProvider detail_provider)
+    : ImGuiDialog(imgui_drawer),
+      stats_provider_(std::move(stats_provider)),
+      detail_provider_(std::move(detail_provider)) {}
 
 DebugOverlayDialog::~DebugOverlayDialog() {}
 
@@ -51,6 +54,11 @@ void DebugOverlayDialog::OnDraw(ImGuiIO& io) {
                          static_cast<int>(guest_fps_history_idx_), "Guest FPS", 0.0f, 150.0f,
                          ImVec2(200, 40));
       }
+    }
+
+    if (detail_provider_) {
+      ImGui::Separator();
+      detail_provider_();
     }
 #ifdef REXGLUE_ENABLE_PERF_COUNTERS
     ImGui::Separator();

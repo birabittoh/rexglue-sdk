@@ -27,16 +27,26 @@ class DebugOverlayDialog : public ImGuiDialog {
  public:
   using FrameStatsProvider = std::function<FrameStats()>;
 
-  explicit DebugOverlayDialog(ImGuiDrawer* imgui_drawer, FrameStatsProvider stats_provider = {});
+  /// Draws extra ImGui content inside the debug window, below the frame rate
+  /// section. This is how an app puts numbers only it can measure -- a custom
+  /// renderer's own phase timings, for instance -- next to the frame rate they
+  /// explain, instead of building a second overlay that says half the story.
+  /// Called inside Begin/End on the ImGui draw thread.
+  using DetailProvider = std::function<void()>;
+
+  explicit DebugOverlayDialog(ImGuiDrawer* imgui_drawer, FrameStatsProvider stats_provider = {},
+                              DetailProvider detail_provider = {});
   ~DebugOverlayDialog();
 
   void SetStatsProvider(FrameStatsProvider provider) { stats_provider_ = std::move(provider); }
+  void SetDetailProvider(DetailProvider provider) { detail_provider_ = std::move(provider); }
 
  protected:
   void OnDraw(ImGuiIO& io) override;
 
  private:
   FrameStatsProvider stats_provider_;
+  DetailProvider detail_provider_;
 
   // Rolling FPS-fluctuation history, unconditional (unlike the perf-counters
   // frame-time graph below) since it only needs io.Framerate/FrameStats, both
