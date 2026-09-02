@@ -390,45 +390,23 @@ bool IsContentTreeUri(const std::string& path) {
   return IsContentUri(path) && path.find("/tree/") != std::string::npos;
 }
 
-/// Copy a content:// URI to a local file using SDL_IOStream, which understands
-/// Android content URIs internally. Returns true on success.
-bool CopyContentUriToFile(const std::string& uri, const std::filesystem::path& dest) {
-  SDL_IOStream* src = SDL_IOFromFile(uri.c_str(), "rb");
-  if (!src) {
-    REXLOG_ERROR("Failed to open content URI {}: {}", uri, SDL_GetError());
-    return false;
+/// Earlier builds copied the picked disc image into `<base>/import` before
+/// extracting it. Extraction now reads the content URI in place, so that copy
+/// is dead weight: a second full-size duplicate of the image sitting in app
+/// storage forever. Delete it once, on behalf of anyone upgrading.
+void RemoveLegacyImportCopy() {
+  auto import_dir = GetWritableBaseDir() / "import";
+  std::error_code ec;
+  if (!std::filesystem::exists(import_dir, ec)) {
+    return;
   }
-
-  std::filesystem::create_directories(dest.parent_path());
-  std::ofstream out(dest, std::ios::binary);
-  if (!out) {
-    SDL_CloseIO(src);
-    REXLOG_ERROR("Failed to create local file {}", dest.string());
-    return false;
+  const auto removed = std::filesystem::remove_all(import_dir, ec);
+  if (ec) {
+    REXLOG_WARN("Could not remove the legacy import copy at {}: {}", import_dir.string(),
+                ec.message());
+    return;
   }
-
-  // Size is known here, so this step can report a real percentage. A negative
-  // return means the stream has no size, which the reporter treats as unknown.
-  const Sint64 src_size = SDL_GetIOSize(src);
-  ProgressReporter progress("Copying game files to app storage",
-                            src_size > 0 ? static_cast<uint64_t>(src_size) : 0);
-
-  constexpr size_t kBufSize = 1 << 20;  // 1 MiB
-  auto buf = std::make_unique<char[]>(kBufSize);
-  uint64_t total = 0;
-  while (true) {
-    size_t n = SDL_ReadIO(src, buf.get(), kBufSize);
-    if (n == 0)
-      break;
-    out.write(buf.get(), static_cast<std::streamsize>(n));
-    total += n;
-    progress.AddBytes(n);
-  }
-  SDL_CloseIO(src);
-  out.close();
-
-  REXLOG_INFO("Copied content URI to {} ({} bytes)", dest.string(), total);
-  return out.good() || total > 0;
+  REXLOG_INFO("Removed the legacy import copy at {} ({} entries)", import_dir.string(), removed);
 }
 #endif  // REX_PLATFORM_ANDROID
 
@@ -463,8 +441,31 @@ bool HexEqual(std::string_view a, std::string_view b) {
 /// image costs 16 GiB of I/O rather than 16 GiB of RAM.
 class FileReader {
  public:
-  explicit FileReader(const std::filesystem::path& path)
-      : ifs_(path, std::ios::binary | std::ios::ate) {
+  explicit FileReader(const std::filesystem::path& path) {
+#if REX_PLATFORM_ANDROID
+    // A Storage Access Framework URI is not a file, so std::ifstream cannot
+    // touch it; only SDL's IOStream knows how to resolve it through
+    // ContentResolver. Reading the image in place through that handle is what
+    // lets a multi-gigabyte ISO be extracted without first duplicating it into
+    // the app's own storage.
+    if (IsContentUri(path.string())) {
+      io_ = SDL_IOFromFile(path.string().c_str(), "rb");
+      if (!io_) {
+        REXLOG_ERROR("Failed to open content URI {}: {}", path.string(), SDL_GetError());
+        return;
+      }
+      const Sint64 io_size = SDL_GetIOSize(io_);
+      if (io_size > 0) {
+        size_ = static_cast<uint64_t>(io_size);
+      } else {
+        // Without a size every bounds check below would reject everything, so
+        // treat it as a failed open rather than as an empty file.
+        REXLOG_ERROR("Content URI {} reports no size: {}", path.string(), SDL_GetError());
+      }
+      return;
+    }
+#endif
+    ifs_.open(path, std::ios::binary | std::ios::ate);
     if (ifs_) {
       auto end = ifs_.tellg();
       if (end > 0) {
@@ -472,6 +473,17 @@ class FileReader {
       }
     }
   }
+
+  ~FileReader() {
+#if REX_PLATFORM_ANDROID
+    if (io_) {
+      SDL_CloseIO(io_);
+    }
+#endif
+  }
+
+  FileReader(const FileReader&) = delete;
+  FileReader& operator=(const FileReader&) = delete;
 
   bool ok() const { return size_ > 0; }
   uint64_t size() const { return size_; }
@@ -485,6 +497,26 @@ class FileReader {
     if (off > size_ || len > size_ - off) {
       return false;
     }
+#if REX_PLATFORM_ANDROID
+    if (io_) {
+      if (SDL_SeekIO(io_, static_cast<Sint64>(off), SDL_IO_SEEK_SET) < 0) {
+        return false;
+      }
+      auto* p = static_cast<char*>(dst);
+      uint64_t remaining = len;
+      while (remaining > 0) {
+        // SDL_ReadIO is allowed to return short reads; 0 means EOF or error,
+        // and the range was already bounds checked, so either is a failure.
+        const size_t n = SDL_ReadIO(io_, p, static_cast<size_t>(remaining));
+        if (n == 0) {
+          return false;
+        }
+        p += n;
+        remaining -= n;
+      }
+      return true;
+    }
+#endif
     ifs_.clear();
     ifs_.seekg(static_cast<std::streamoff>(off));
     if (!ifs_) {
@@ -570,6 +602,9 @@ class FileReader {
 
  private:
   std::ifstream ifs_;
+#if REX_PLATFORM_ANDROID
+  SDL_IOStream* io_ = nullptr;
+#endif
   uint64_t size_ = 0;
   ProgressReporter* progress_ = nullptr;
 };
@@ -1665,6 +1700,10 @@ static bool ProcessTitleUpdate(const std::filesystem::path& dir,
 namespace {
 
 bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
+#if REX_PLATFORM_ANDROID
+  RemoveLegacyImportCopy();
+#endif
+
   // 1. Check whether game_data_root is already valid.
   std::filesystem::path dir;
   {
@@ -1758,8 +1797,9 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
 #if REX_PLATFORM_ANDROID
   // Android's Storage Access Framework returns content:// URIs from the file
   // picker. These can only be read through ContentResolver, not via normal
-  // file I/O. SDL_IOFromFile understands them, so we copy the file to the
-  // app's internal storage before processing.
+  // file I/O. FileReader opens them through SDL_IOStream, so the URI is passed
+  // straight through to sniffing and extraction: the image is read where it
+  // already lives instead of being duplicated into app storage first.
   if (IsContentTreeUri(selected)) {
     // Not reachable through the buttons above (kCanPickFolder is false here),
     // but a tree URI reaching the file branch would otherwise be "copied" into
@@ -1772,32 +1812,20 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
                  "files into the app's storage folder.");
     return false;
   }
-  if (!std::filesystem::is_directory(selected_path) && IsContentUri(selected)) {
-    auto local_dir = GetWritableBaseDir() / "import";
-    // Derive a filename from the URI's last path segment, or fall back to a
-    // generic name.
-    std::string filename = "import.iso";
-    if (auto pos = selected.rfind('/'); pos != std::string::npos && pos + 1 < selected.size()) {
-      filename = selected.substr(pos + 1);
-    }
-    auto local_path = local_dir / filename;
-    REXLOG_INFO("Android: copying content URI to {}...", local_path.string());
-
-    // Progress is shown in a window created for the duration of the copy.
-    if (!CopyContentUriToFile(selected, local_path)) {
-      ShowErrorBox("Copy Failed",
-                   "Failed to copy the selected file to the app's storage.\n\n"
-                   "Make sure there is enough free space on the device.");
-      return false;
-    }
-    selected_path = local_path;
+  const bool is_content_uri = IsContentUri(selected);
+  if (is_content_uri) {
+    REXLOG_INFO("Android: extracting in place from content URI {}", selected);
   }
+#else
+  const bool is_content_uri = false;
 #endif
 
   // Picking default.xex itself inside an extracted directory is a natural
-  // mistake — treat it as selecting the directory that contains it.
-  if (std::filesystem::is_regular_file(selected_path) && HasExtension(selected_path, "xex") &&
-      selected_path.has_parent_path()) {
+  // mistake — treat it as selecting the directory that contains it. A content
+  // URI is never a path std::filesystem can stat, so the query is skipped
+  // rather than being answered from a bogus relative path.
+  if (!is_content_uri && std::filesystem::is_regular_file(selected_path) &&
+      HasExtension(selected_path, "xex") && selected_path.has_parent_path()) {
     REXLOG_INFO("Selected {}, using its parent directory as the game data root",
                 selected_path.filename().string());
     selected_path = selected_path.parent_path();
@@ -1807,7 +1835,7 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
   std::filesystem::path out_dir = GetWritableBaseDir() / "assets";
 
   // 6. Process the selection.
-  if (std::filesystem::is_directory(selected_path)) {
+  if (!is_content_uri && std::filesystem::is_directory(selected_path)) {
     dir = selected_path;
     if (!ValidateDefaultXexInDir(dir, settings.default_xex_sha256)) {
       ShowErrorBox("Validation Failed",
