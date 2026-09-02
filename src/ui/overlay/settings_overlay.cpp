@@ -13,6 +13,7 @@
 #include <rex/cvar.h>
 #include <rex/string.h>
 #include <rex/string/numeric.h>
+#include <rex/ui/imgui_widgets.h>
 #include <rex/ui/keybinds.h>
 #include <imgui.h>
 
@@ -434,7 +435,7 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
       ImGui::SetNextItemWidth(160.0f);
       if (entry.type == rex::cvar::FlagType::Boolean) {
         bool v = rex::string::from_string<bool>(current_val, false);
-        if (ImGui::Checkbox("##v", &v)) {
+        if (rex::ui::ToggleSwitch("##v", &v)) {
           rex::cvar::SetFlagByName(entry.name, v ? "true" : "false");
         }
       } else if (entry.type == rex::cvar::FlagType::String &&

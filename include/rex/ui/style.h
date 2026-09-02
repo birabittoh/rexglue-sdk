@@ -20,14 +20,14 @@
 namespace rex::ui {
 
 struct AchievementsStyle {
-  ImVec4 unlocked_title{0.45f, 1.00f, 0.55f, 1.00f};
-  ImVec4 unlocked_desc{0.70f, 0.85f, 0.72f, 1.00f};
+  // Unlocked title/description/row-band/progress-bar color is not here: it
+  // derives from ImGuiCol_CheckMark at draw time (see achievements_overlay.cpp),
+  // so a project's OnConfigureStyle recolor of imgui_style applies to it
+  // automatically instead of needing a separate ui_style override.
   ImVec4 locked_title{0.78f, 0.80f, 0.84f, 1.00f};
   ImVec4 locked_desc{0.50f, 0.52f, 0.56f, 1.00f};
   ImVec4 badge_gamerscore{1.00f, 0.82f, 0.30f, 1.00f};
-  ImVec4 row_unlocked_bg{0.16f, 0.30f, 0.18f, 0.55f};
   ImVec4 header_text{0.60f, 0.85f, 1.00f, 1.00f};
-  ImVec4 progress_bar{0.30f, 0.80f, 0.40f, 1.00f};
   ImVec4 unlocked_icon_tint{1.00f, 1.00f, 1.00f, 1.00f};
   ImVec4 locked_icon_tint{0.45f, 0.45f, 0.45f, 0.80f};
   ImVec2 window_padding{14.0f, 12.0f};

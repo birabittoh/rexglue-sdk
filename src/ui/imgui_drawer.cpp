@@ -197,8 +197,15 @@ void ImGuiDrawer::Initialize() {
   }
 #endif
 
+  // If the project's font_setup_ adds a full (non-merge) font on top of the
+  // built-in ProggyTiny/JP fonts above, treat it as the project's preferred
+  // UI font and make it the default rather than leaving ProggyTiny active.
+  const int font_count_before = io.Fonts->Fonts.Size;
   if (font_setup_) {
     font_setup_(io.Fonts);
+  }
+  if (io.Fonts->Fonts.Size > font_count_before) {
+    io.FontDefault = io.Fonts->Fonts.back();
   }
 
   auto& style = ImGui::GetStyle();

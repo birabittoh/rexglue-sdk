@@ -27,6 +27,29 @@ AchievementsOverlayDialog::AchievementsOverlayDialog(ImGuiDrawer* imgui_drawer,
 
 AchievementsOverlayDialog::~AchievementsOverlayDialog() {}
 
+namespace {
+// The "unlocked" accent (title text, description tint, row band, progress
+// bar) derives from the active theme's CheckMark color rather than the
+// AchievementsStyle defaults, so a project's OnConfigureStyle recolor (e.g.
+// via rex::ui::ApplyAccentTheme) applies here too instead of clashing with
+// it.
+ImVec4 UnlockedTitleColor() {
+  ImVec4 c = ImGui::GetStyle().Colors[ImGuiCol_CheckMark];
+  c.w = 1.0f;
+  return c;
+}
+
+ImVec4 UnlockedDescColor() {
+  const ImVec4 accent = UnlockedTitleColor();
+  return ImVec4(accent.x * 0.6f + 0.35f, accent.y * 0.6f + 0.35f, accent.z * 0.6f + 0.35f, 1.0f);
+}
+
+ImVec4 RowUnlockedBgColor() {
+  const ImVec4 accent = UnlockedTitleColor();
+  return ImVec4(accent.x * 0.5f, accent.y * 0.5f, accent.z * 0.5f, 0.35f);
+}
+}  // namespace
+
 ImmediateTexture* AchievementsOverlayDialog::GetIcon(
     const rex::system::AchievementInfo& achievement) {
   return icon_cache_.GetIcon(achievement);
@@ -66,7 +89,7 @@ void AchievementsOverlayDialog::OnDraw(ImGuiIO& io) {
     ImGui::TextColored(style.badge_gamerscore, "%dG / %dG", earned_gs, total_gs);
 
     float frac = total_count > 0 ? static_cast<float>(unlocked_count) / total_count : 0.0f;
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, style.progress_bar);
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, UnlockedTitleColor());
     ImGui::ProgressBar(frac, ImVec2(-1.0f, 6.0f), "");
     ImGui::PopStyleColor();
 
@@ -108,14 +131,14 @@ void AchievementsOverlayDialog::OnDraw(ImGuiIO& io) {
       // Text block to the right of the icon.
       ImGui::BeginGroup();
       const char* marker = is_unlocked ? "[*]" : "[ ]";
-      const ImVec4& title_color = is_unlocked ? style.unlocked_title : style.locked_title;
+      const ImVec4 title_color = is_unlocked ? UnlockedTitleColor() : style.locked_title;
       ImGui::TextColored(title_color, "%s", marker);
       ImGui::SameLine();
       ImGui::TextColored(style.badge_gamerscore, "%dG", static_cast<int>(a.gamerscore));
       ImGui::SameLine();
       ImGui::TextColored(title_color, "%s", a.label.c_str());
 
-      ImGui::PushStyleColor(ImGuiCol_Text, is_unlocked ? style.unlocked_desc : style.locked_desc);
+      ImGui::PushStyleColor(ImGuiCol_Text, is_unlocked ? UnlockedDescColor() : style.locked_desc);
       ImGui::TextWrapped("%s", desc.c_str());
       ImGui::PopStyleColor();
       ImGui::EndGroup();
@@ -129,7 +152,7 @@ void AchievementsOverlayDialog::OnDraw(ImGuiIO& io) {
         const float x0 = ImGui::GetWindowPos().x + 2.0f;
         const float x1 = x0 + ImGui::GetWindowSize().x - 4.0f;
         draw_list->AddRectFilled(ImVec2(x0, row_start_y), ImVec2(x1, row_end_y),
-                                 ImGui::GetColorU32(style.row_unlocked_bg), style.row_rounding);
+                                 ImGui::GetColorU32(RowUnlockedBgColor()), style.row_rounding);
       }
       draw_list->ChannelsMerge();
 
