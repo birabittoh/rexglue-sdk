@@ -368,7 +368,7 @@ inline vec128_t from_string<vec128_t>(const std::string_view value, bool force_h
         return vec128_t();
       }
 #if REX_PLATFORM_MAC
-      auto result = portable_float_from_chars(p, end, v.f32[i]);
+      auto result = detail::portable_float_from_chars(p, end, v.f32[i]);
 #else
       auto result = detail::from_chars_float(p, end, v.f32[i], std::chars_format::general);
 #endif
