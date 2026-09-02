@@ -139,10 +139,12 @@ target_link_libraries(rexcore
         simde
         tomlplusplus
         spdlog::spdlog
+        # rex/hash.h is a public header and pulls in <xxhash.h> itself (XXH_INLINE_ALL),
+        # so consumers of that header need xxHash's include dir too, not just rexcore.
+        xxHash::xxhash
     PRIVATE
         disruptorplus
         utf8cpp
-        xxHash::xxhash
         stb_image
         stb_image_write
         miniz

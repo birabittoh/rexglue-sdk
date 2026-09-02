@@ -40,6 +40,7 @@ target_link_libraries(unit_tests PRIVATE
     rexcodegen
     rexruntime
     miniz
+    xxHash::xxhash
     Catch2::Catch2WithMain
 )
 
