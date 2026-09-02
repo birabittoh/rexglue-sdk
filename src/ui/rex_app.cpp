@@ -402,8 +402,8 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
     if (debug_overlay_) {
       debug_overlay_.reset();
     } else {
-      debug_overlay_ =
-          std::make_unique<ui::DebugOverlayDialog>(imgui_drawer_.get(), frame_stats_provider_);
+      debug_overlay_ = std::make_unique<ui::DebugOverlayDialog>(
+          imgui_drawer_.get(), frame_stats_provider_, frame_detail_provider_);
     }
   });
   rex::ui::RegisterBind("bind_console", "Backtick", "Toggle console overlay", [this] {
@@ -614,6 +614,13 @@ void ReXApp::SetGuestFrameStats(ui::DebugOverlayDialog::FrameStatsProvider provi
   frame_stats_provider_ = provider;
   if (debug_overlay_) {
     debug_overlay_->SetStatsProvider(provider);
+  }
+}
+
+void ReXApp::SetDebugOverlayDetails(ui::DebugOverlayDialog::DetailProvider provider) {
+  frame_detail_provider_ = provider;
+  if (debug_overlay_) {
+    debug_overlay_->SetDetailProvider(provider);
   }
 }
 

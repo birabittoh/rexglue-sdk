@@ -19,25 +19,46 @@
 
 namespace rex::ui {
 
-DebugOverlayDialog::DebugOverlayDialog(ImGuiDrawer* imgui_drawer, FrameStatsProvider stats_provider)
-    : ImGuiDialog(imgui_drawer), stats_provider_(std::move(stats_provider)) {}
+DebugOverlayDialog::DebugOverlayDialog(ImGuiDrawer* imgui_drawer, FrameStatsProvider stats_provider,
+                                       DetailProvider detail_provider)
+    : ImGuiDialog(imgui_drawer),
+      stats_provider_(std::move(stats_provider)),
+      detail_provider_(std::move(detail_provider)) {}
 
 DebugOverlayDialog::~DebugOverlayDialog() {}
 
 void DebugOverlayDialog::OnDraw(ImGuiIO& io) {
   ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
 #ifdef REXGLUE_ENABLE_PERF_COUNTERS
-  ImGui::SetNextWindowSize(ImVec2(280, 280), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(280, 360), ImGuiCond_FirstUseEver);
 #else
-  ImGui::SetNextWindowSize(ImVec2(220, 60), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(220, 160), ImGuiCond_FirstUseEver);
 #endif
   ImGui::SetNextWindowBgAlpha(0.5f);
   if (ImGui::Begin("Debug##overlay", nullptr, ImGuiWindowFlags_NoCollapse)) {
+    ImGui::Text("Host: %.1f FPS (%.2f ms)", io.Framerate,
+                io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f);
+    host_fps_history_[host_fps_history_idx_] = io.Framerate;
+    host_fps_history_idx_ = (host_fps_history_idx_ + 1) % kFpsHistorySize;
+    ImGui::PlotLines("##hostfps", host_fps_history_.data(), static_cast<int>(kFpsHistorySize),
+                     static_cast<int>(host_fps_history_idx_), "Host FPS", 0.0f, 150.0f,
+                     ImVec2(200, 40));
+
     if (stats_provider_) {
       auto stats = stats_provider_();
       if (stats.frame_count > 0) {
         ImGui::Text("Guest: %.1f FPS (%.2f ms)", stats.fps, stats.frame_time_ms);
+        guest_fps_history_[guest_fps_history_idx_] = static_cast<float>(stats.fps);
+        guest_fps_history_idx_ = (guest_fps_history_idx_ + 1) % kFpsHistorySize;
+        ImGui::PlotLines("##guestfps", guest_fps_history_.data(), static_cast<int>(kFpsHistorySize),
+                         static_cast<int>(guest_fps_history_idx_), "Guest FPS", 0.0f, 150.0f,
+                         ImVec2(200, 40));
       }
+    }
+
+    if (detail_provider_) {
+      ImGui::Separator();
+      detail_provider_();
     }
 #ifdef REXGLUE_ENABLE_PERF_COUNTERS
     ImGui::Separator();

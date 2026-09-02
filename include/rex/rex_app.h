@@ -261,6 +261,10 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   /// Set a callback that provides guest frame stats to the debug overlay.
   void SetGuestFrameStats(ui::DebugOverlayDialog::FrameStatsProvider provider);
 
+  /// Set a callback that draws extra ImGui rows in the debug overlay, below the
+  /// frame rate graphs. For numbers only the app can measure.
+  void SetDebugOverlayDetails(ui::DebugOverlayDialog::DetailProvider provider);
+
  private:
   std::function<void(PathConfig)> MakeResumeCallback();
 
@@ -310,6 +314,7 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   std::shared_ptr<ui::AchievementNotificationDialog> achievement_notification_;
   uint64_t achievement_notification_listener_ = 0;
   ui::DebugOverlayDialog::FrameStatsProvider frame_stats_provider_;
+  ui::DebugOverlayDialog::DetailProvider frame_detail_provider_;
   std::filesystem::path config_path_;
 };
 
