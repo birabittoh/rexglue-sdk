@@ -354,6 +354,15 @@ std::vector<ModStateEntry> ModState::AutoSort(
 std::string ModState::HostPlatformId() {
 #if defined(_WIN32)
   return "windows-x64";
+#elif defined(__APPLE__)
+  // Checked before the architecture branches below: an arm64 mac matches
+  // __aarch64__ too, so it used to report itself as "linux-arm64", which made
+  // the auto-updater ask GitHub for the Linux asset.
+#if defined(__aarch64__) || defined(_M_ARM64)
+  return "mac-arm64";
+#else
+  return "mac-x64";
+#endif
 #elif defined(__aarch64__) || defined(_M_ARM64)
   return "linux-arm64";
 #else

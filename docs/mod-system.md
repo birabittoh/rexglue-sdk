@@ -345,7 +345,7 @@ The SDK's own `ModInfo`/`ParseModInfo` now parses a `platform` key into
   and by `ModCatalog`'s "All" tab compatibility check) treats a code mod
   (one with a `code` key) that declares no `platform` entries, or whose
   `platform` list doesn't include the running host's platform id
-  (`windows-x64`/`linux-x64`/`linux-arm64`), as a **hard error**, the same
+  (`windows-x64`/`linux-x64`/`linux-arm64`/`mac-arm64`), as a **hard error**, the same
   severity as an unmet `requires` version constraint, surfaced as a
   per-row `[error]` badge the player has to act on (update, disable, or
   remove the mod). This is the primary enforcement point, since it runs
@@ -366,7 +366,7 @@ only reads and enforces what's already there.
 
 The convention: a `platform` key in a code mod's `mod.toml`, holding a
 comma-separated list of target identifiers (e.g.
-`"windows-x64,linux-x64,linux-arm64"`) recording which platform(s) that
+`"windows-x64,linux-x64,linux-arm64,mac-arm64"`) recording which platform(s) that
 mod's `code/` directory currently ships a binary for. It is written by the
 build tooling after a build, not by the mod author, and reflects what's
 actually on disk right now, not a request or a restriction to build for
@@ -374,8 +374,10 @@ that platform.
 
 `LoadModPlugin` (`src/system/mod_plugin_loader.cpp`) resolves those same
 target identifiers as an optional subdirectory under `code/`: it first looks
-for `code/<platform>/<stem>.dll` (or `lib<stem>.so`), where `<platform>` is
-whichever one of `windows-x64`, `linux-x64`, `linux-arm64` matches the
+for `code/<platform>/<stem>.dll` (or `lib<stem>.so`, `lib<stem>.dylib`),
+where `<platform>` is
+whichever one of `windows-x64`, `linux-x64`, `linux-arm64`, `mac-arm64`
+matches the
 running host (`REX_PLATFORM_*`/`REX_ARCH_*` at compile time), and falls back
 to the flat `code/<stem>.dll`/`code/lib<stem>.so` if no matching
 subdirectory exists. This is what lets a single mod folder, and therefore

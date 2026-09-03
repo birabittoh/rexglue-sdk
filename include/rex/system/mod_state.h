@@ -154,14 +154,14 @@ class ModState {
   // min_game_version (empty = "unknown", same can't-verify-so-warn
   // semantics as an empty RuntimeConfig::game_version). `host_platform` is
   // this host's platform id (e.g. "windows-x64", "linux-x64",
-  // "linux-arm64").
+  // "linux-arm64", "mac-arm64").
   static std::vector<ModIssue> Validate(const std::vector<ModStateEntry>& entries,
                                         const std::unordered_map<std::string, ModInfo>& manifests,
                                         std::string_view host_version,
                                         std::string_view host_platform);
 
   // This process's platform id in the "platform" mod.toml key convention
-  // (e.g. "windows-x64", "linux-x64", "linux-arm64").
+  // (e.g. "windows-x64", "linux-x64", "linux-arm64", "mac-arm64").
   static std::string HostPlatformId();
 
   // Sideloads a local mod archive (.zip) dropped onto the game window:

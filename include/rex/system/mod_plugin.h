@@ -146,7 +146,8 @@ struct ModInfo {
   // middle.
   //
   // Platform target(s) this code mod's code/ directory currently ships a
-  // binary for (e.g. "windows-x64", "linux-x64", "linux-arm64"), parsed from
+  // binary for (e.g. "windows-x64", "linux-x64", "linux-arm64",
+  // "mac-arm64"), parsed from
   // mod.toml's `platform` key (comma-separated). Always empty for asset-only
   // mods (no `code`), and purely descriptive for the SDK itself; it does
   // not gate LoadModPlugin, but is consumed by rex::system::ModState::Validate

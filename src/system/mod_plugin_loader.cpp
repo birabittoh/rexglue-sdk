@@ -34,12 +34,14 @@ namespace {
 std::string ModFileName(std::string_view stem, std::string_view postfix) {
 #if REX_PLATFORM_WIN32
   return fmt::format("{}{}.dll", stem, postfix);
+#elif REX_PLATFORM_MAC
+  return fmt::format("lib{}{}.dylib", stem, postfix);
 #else
   return fmt::format("lib{}{}.so", stem, postfix);
 #endif
 }
 
-// Matches the "windows-x64" / "linux-x64" / "linux-arm64" keys mod-build
+// Matches the "windows-x64" / "linux-x64" / "linux-arm64" / "mac-arm64" keys mod-build
 // tooling (e.g. NocturneRecomp-Mods' scripts/make_mods.py) already writes
 // into a mod's `platform` manifest field, so a mod distribution zip can ship
 // one `code/<platform>/` subdirectory per platform side by side, needed in
@@ -48,6 +50,14 @@ std::string ModFileName(std::string_view stem, std::string_view postfix) {
 constexpr std::string_view ModPlatformDir() {
 #if REX_PLATFORM_WIN32
   return "windows-x64";
+#elif REX_PLATFORM_MAC
+#if defined(REX_ARCH_ARM64)
+  return "mac-arm64";
+#elif defined(REX_ARCH_AMD64)
+  return "mac-x64";
+#else
+  return "";
+#endif
 #elif REX_PLATFORM_LINUX
 #if defined(REX_ARCH_ARM64)
   return "linux-arm64";
