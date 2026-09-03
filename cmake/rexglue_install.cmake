@@ -128,6 +128,22 @@ install(FILES
     DESTINATION ${CMAKE_INSTALL_DATADIR}/rexglue
 )
 
+# Install SDL3's Android Java glue alongside the Android libraries.
+#
+# librexruntime.so links SDL3 statically, so its JNI_OnLoad calls
+# RegisterNatives against org.libsdl.app.* with the signatures of exactly this
+# SDL3 revision. A consumer APK that vendors its own copy of these .java files
+# silently goes stale the moment SDL3 is updated here, and ART then aborts the
+# process at System.loadLibrary time with a NoSuchMethodError. Shipping them
+# from the same submodule the runtime was built from keeps the two in lockstep:
+# consumers point their Gradle java srcDir at share/rexglue/android/java.
+if(ANDROID)
+    install(DIRECTORY thirdparty/sdl3/android-project/app/src/main/java/org/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/rexglue/android/java/org
+        FILES_MATCHING PATTERN "*.java"
+    )
+endif()
+
 # Install DXC API headers (vendored, for D3D12 backend)
 if(REXGLUE_USE_D3D12)
     install(FILES
