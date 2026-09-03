@@ -20,6 +20,8 @@
 #include <rex/filesystem.h>
 #include <rex/logging/sink.h>
 #include <rex/logging.h>
+#include <rex/platform.h>
+#include <rex/platform/env.h>
 #include <rex/ui/overlay/achievement_toast.h>
 #include <rex/ui/overlay/hint_toast.h>
 #include <rex/ui/overlay/achievements_overlay.h>
@@ -249,8 +251,38 @@ void ReXApp::RefreshPathDefaultsIfCvarsChanged() {
   }
 }
 
+// Where the config file and the default log directory live: next to the
+// executable, except inside a macOS .app, where that means writing into the
+// bundle. /Applications is not user writable and a quarantined app runs from a
+// read only path, so a bundle gets ~/Library/Application Support/<name>.
+// Keyed on being in a bundle, not on the platform, so nothing else changes.
+static std::filesystem::path AppSettingsFolder(std::string_view app_name) {
+  const std::filesystem::path exe_dir = rex::filesystem::GetExecutableFolder();
+
+#if REX_PLATFORM_MAC
+  const std::filesystem::path contents = exe_dir.parent_path();
+  const bool in_bundle = exe_dir.filename() == "MacOS" && contents.filename() == "Contents" &&
+                         contents.parent_path().extension() == ".app";
+  if (in_bundle) {
+    if (auto home = rex::platform::env::get("HOME")) {
+      std::filesystem::path settings =
+          std::filesystem::path(*home) / "Library" / "Application Support" / app_name;
+      std::error_code ec;
+      std::filesystem::create_directories(settings, ec);
+      if (!ec) {
+        return settings;
+      }
+    }
+  }
+#else
+  (void)app_name;
+#endif
+
+  return exe_dir;
+}
+
 bool ReXApp::SetupEnvironment() {
-  auto exe_dir = rex::filesystem::GetExecutableFolder();
+  auto exe_dir = AppSettingsFolder(GetName());
   config_path_ = exe_dir / (std::string(GetName()) + ".toml");
 
   // Load config FIRST so path and log cvars have final values
