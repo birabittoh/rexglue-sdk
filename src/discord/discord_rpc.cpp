@@ -3,6 +3,12 @@
 #include <rex/logging.h>
 #include <rex/platform.h>
 
+// Everything outside Windows talks to Discord over the same AF_UNIX socket
+// protocol; only the directory the socket lives in differs (see
+// GetSocketDirs). REX_PLATFORM_LINUX also covers Android, which has no Discord
+// client and never builds this file.
+#define REX_DISCORD_RPC_POSIX (REX_PLATFORM_LINUX || REX_PLATFORM_MAC)
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -11,7 +17,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#if REX_PLATFORM_LINUX
+#if REX_DISCORD_RPC_POSIX
 #include <vector>
 #endif
 
@@ -25,7 +31,8 @@ REXCVAR_DEFINE_BOOL(discord_activity, true, "Thirdparty", "Enable Discord Rich P
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
-#elif REX_PLATFORM_LINUX
+#elif REX_DISCORD_RPC_POSIX
+#include <cstdlib>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -57,7 +64,7 @@ HANDLE g_pipe = INVALID_HANDLE_VALUE;
 bool IsConnected() {
   return g_pipe != INVALID_HANDLE_VALUE;
 }
-#elif REX_PLATFORM_LINUX
+#elif REX_DISCORD_RPC_POSIX
 int g_sock = -1;
 bool IsConnected() {
   return g_sock != -1;
@@ -88,8 +95,12 @@ void CloseConnection() {
   }
 }
 
-#elif REX_PLATFORM_LINUX
+#elif REX_DISCORD_RPC_POSIX
 
+// Candidate directories holding "discord-ipc-N", most specific first. On macOS
+// the client only ever uses the per-user $TMPDIR
+// (/var/folders/.../T/discord-ipc-0); the Linux entries below are harmless
+// there and vice versa, so the list is shared.
 std::vector<std::string> GetSocketDirs() {
   std::vector<std::string> dirs;
   const char* xdg = std::getenv("XDG_RUNTIME_DIR");
@@ -151,7 +162,7 @@ bool WriteFrame(uint32_t op, const std::string& payload) {
   return true;
 }
 
-#elif REX_PLATFORM_LINUX
+#elif REX_DISCORD_RPC_POSIX
 
 bool WriteAll(const void* buf, size_t len) {
   const char* ptr = static_cast<const char*>(buf);
@@ -218,7 +229,7 @@ void DrainMessages(bool* out_ready = nullptr) {
   }
 }
 
-#elif REX_PLATFORM_LINUX
+#elif REX_DISCORD_RPC_POSIX
 
 bool ReadAll(void* buf, size_t len) {
   char* ptr = static_cast<char*>(buf);
@@ -281,7 +292,7 @@ uint32_t GetPid() {
 std::string GetNonce() {
   return std::to_string(::GetTickCount());
 }
-#elif REX_PLATFORM_LINUX
+#elif REX_DISCORD_RPC_POSIX
 uint32_t GetPid() {
   return static_cast<uint32_t>(::getpid());
 }

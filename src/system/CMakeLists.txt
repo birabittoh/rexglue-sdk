@@ -126,6 +126,9 @@ if(WIN32)
 elseif(ANDROID)
     # Android: no Discord RPC, no auto-updater (updates go through the store).
     # No ws2_32 or desktop-specific libs.
+elseif(APPLE)
+    # macOS: Discord RPC only. The auto-updater has no macOS backend yet.
+    target_link_libraries(rexruntime PRIVATE rexdiscord)
 elseif(LINUX)
     target_sources(rexruntime PRIVATE auto_updater_posix.cpp)
     target_link_libraries(rexruntime PRIVATE rexdiscord)
