@@ -50,9 +50,15 @@ std::string PluginFileName(std::string_view name) {
 #endif
 }
 
+// Must stay in sync with PluginFileName above: EnumerateGpuPlugins matches
+// files by prefix and extension, so a platform missing from this pair reports
+// no plugins at all and a settings UI's backend list comes up empty.
 #if REX_PLATFORM_WIN32
 constexpr std::string_view kPluginPrefix = "rexgpu-";
 constexpr std::string_view kPluginExtension = ".dll";
+#elif REX_PLATFORM_MAC
+constexpr std::string_view kPluginPrefix = "librexgpu-";
+constexpr std::string_view kPluginExtension = ".dylib";
 #else
 constexpr std::string_view kPluginPrefix = "librexgpu-";
 constexpr std::string_view kPluginExtension = ".so";
