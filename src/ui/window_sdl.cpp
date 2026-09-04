@@ -707,6 +707,29 @@ void WindowSDL::HandleTextInputEvent(SDL_Event& event) {
 }
 
 void WindowSDL::HandleMouseEvent(SDL_Event& event) {
+  // SDL also synthesizes mouse events from touches, which the finger events
+  // already cover. Letting both through makes listeners flip between the two
+  // devices mid gesture: ImGuiDrawer drops every held button when the mouse
+  // takes over from touch, so a drag ends as soon as the finger moves.
+  SDL_MouseID which = 0;
+  switch (event.type) {
+    case SDL_EVENT_MOUSE_MOTION:
+      which = event.motion.which;
+      break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+      which = event.button.which;
+      break;
+    case SDL_EVENT_MOUSE_WHEEL:
+      which = event.wheel.which;
+      break;
+    default:
+      break;
+  }
+  if (which == SDL_TOUCH_MOUSEID) {
+    return;
+  }
+
   // SDL3 reports float window coordinates; listeners expect physical pixels.
   float density = GetPixelDensity();
   WindowDestructionReceiver destruction_receiver(this);
