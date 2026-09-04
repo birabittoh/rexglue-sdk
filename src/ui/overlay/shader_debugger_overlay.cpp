@@ -471,7 +471,7 @@ void ShaderDebuggerDialog::RefreshSelectedDetails() {
 void ShaderDebuggerDialog::OnDraw(ImGuiIO& io) {
   ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                           ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
-  ImGui::SetNextWindowSize(ImVec2(900, 620), ImGuiCond_FirstUseEver);
+  SetNextWindowFittedSize(io, 900.0f, 620.0f);
   bool open = true;
   if (!ImGui::Begin("Shader Debugger", &open, ImGuiWindowFlags_NoCollapse)) {
     ImGui::End();

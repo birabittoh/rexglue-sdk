@@ -167,7 +167,7 @@ static rex::ui::VirtualKey ImGuiKeyToVirtualKey(ImGuiKey key) {
   }
 }
 
-void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
+void SettingsDialog::OnDraw(ImGuiIO& io) {
   // While capturing a keybind, the mouse is typically hovering this very
   // overlay (WantCaptureMouse), which would otherwise gate raw gamepad state
   // off (see InputDriver::is_active). Bypass that for the duration of the
@@ -218,7 +218,7 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
   const std::string search(search_buf_);
   const bool searching = !search.empty();
 
-  ImGui::SetNextWindowSize(ImVec2(620, 480), ImGuiCond_FirstUseEver);
+  SetNextWindowFittedSize(io, 620.0f, 480.0f);
   ImGui::SetNextWindowBgAlpha(0.85f);
   if (!ImGui::Begin(window_title_.c_str(), nullptr, ImGuiWindowFlags_NoCollapse)) {
     ImGui::End();

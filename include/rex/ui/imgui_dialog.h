@@ -24,6 +24,12 @@ struct ImGuiIO;
 namespace rex {
 namespace ui {
 
+// Gives the next window a default size of `width` by `height`, shrunk to fit
+// when the display is smaller than that, and stops it from ever being resized
+// past the display. Phone-sized displays are narrower than the sizes these
+// overlays were written for.
+void SetNextWindowFittedSize(const ImGuiIO& io, float width, float height);
+
 class ImGuiDialog {
  public:
   virtual ~ImGuiDialog();

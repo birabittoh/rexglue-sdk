@@ -305,7 +305,7 @@ void ModManagerDialog::OnDraw(ImGuiIO& io) {
 
   ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 40.0f), ImGuiCond_FirstUseEver,
                           ImVec2(0.5f, 0.0f));
-  ImGui::SetNextWindowSize(ImVec2(640.0f, 560.0f), ImGuiCond_FirstUseEver);
+  SetNextWindowFittedSize(io, 640.0f, 560.0f);
   ImGui::SetNextWindowBgAlpha(0.92f);
 
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));

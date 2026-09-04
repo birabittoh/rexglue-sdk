@@ -336,6 +336,22 @@ uint32_t WindowSDL::GetLatestDpiImpl() const {
   if (scale <= 0.0f) {
     return GetMediumDpi();
   }
+  // Phone panels report a content scale of 2.5 to 3, which would leave the UI
+  // fewer logical pixels than the overlays' own default window sizes, so they
+  // could never fit on screen. Cap the scale by what the panel can actually
+  // hold. Only ever lowers a scale above 1, so desktops are untouched.
+  if (sdl_window_) {
+    constexpr float kMinLogicalWidth = 960.0f;
+    constexpr float kMinLogicalHeight = 540.0f;
+    int pixel_width = 0;
+    int pixel_height = 0;
+    if (SDL_GetWindowSizeInPixels(sdl_window_, &pixel_width, &pixel_height) && pixel_width > 0 &&
+        pixel_height > 0) {
+      const float fitting_scale =
+          std::min(float(pixel_width) / kMinLogicalWidth, float(pixel_height) / kMinLogicalHeight);
+      scale = std::max(1.0f, std::min(scale, fitting_scale));
+    }
+  }
   return uint32_t(scale * float(GetMediumDpi()) + 0.5f);
 }
 

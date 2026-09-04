@@ -15,8 +15,17 @@
 
 #include <imgui.h>
 
+#include <algorithm>
+
 namespace rex {
 namespace ui {
+
+void SetNextWindowFittedSize(const ImGuiIO& io, float width, float height) {
+  const ImVec2 limit(io.DisplaySize.x, io.DisplaySize.y);
+  ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), limit);
+  ImGui::SetNextWindowSize(ImVec2(std::min(width, limit.x), std::min(height, limit.y)),
+                           ImGuiCond_FirstUseEver);
+}
 
 ImGuiDialog::ImGuiDialog(ImGuiDrawer* imgui_drawer) : imgui_drawer_(imgui_drawer) {
   imgui_drawer_->AddDialog(this);

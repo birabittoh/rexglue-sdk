@@ -86,7 +86,11 @@ void OverlayMenuDialog::OnDraw(ImGuiIO& io) {
     return;
   }
 
-  ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_FirstUseEver);
+  // Auto resized, so only the ceiling matters: on a phone the bind list is
+  // taller than the screen and would otherwise run off it.
+  ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), io.DisplaySize);
+  ImGui::SetNextWindowSize(ImVec2(std::min(420.0f, io.DisplaySize.x), 0.0f),
+                           ImGuiCond_FirstUseEver);
   if (!ImGui::Begin(kWindowTitle, &visible_, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::End();
     return;
