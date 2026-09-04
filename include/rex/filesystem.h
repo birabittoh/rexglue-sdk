@@ -142,6 +142,13 @@ int OpenAndroidContentFileDescriptor(const std::string_view uri, const char* mod
 bool ExtractZip(const std::filesystem::path& archive, const std::filesystem::path& dest_dir,
                 std::string& error);
 
+// Writes every regular file under `src_dir` into a new deflated `archive`,
+// named relative to `src_dir` with forward slashes, so ExtractZip round trips
+// it. An empty `src_dir` still produces a valid empty archive. Returns false
+// and populates `error` on any failure; never throws.
+bool CreateZip(const std::filesystem::path& src_dir, const std::filesystem::path& archive,
+               std::string& error);
+
 // Extracts `archive` (a gzip-compressed ustar .tar.gz file) into `dest_dir`,
 // creating it if needed. Same path-traversal rejection and error-reporting
 // contract as ExtractZip (never throws; false + `error` on any failure).

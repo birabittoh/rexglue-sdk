@@ -123,6 +123,54 @@ bool ExtractZip(const std::filesystem::path& archive, const std::filesystem::pat
   return ok;
 }
 
+bool CreateZip(const std::filesystem::path& src_dir, const std::filesystem::path& archive,
+               std::string& error) {
+  std::error_code ec;
+  std::filesystem::create_directories(archive.parent_path(), ec);
+
+  mz_zip_archive zip{};
+  if (!mz_zip_writer_init_file(&zip, archive.string().c_str(), 0)) {
+    error = "failed to create archive " + archive.string();
+    return false;
+  }
+
+  bool ok = true;
+  std::filesystem::recursive_directory_iterator it(
+      src_dir, std::filesystem::directory_options::skip_permission_denied, ec);
+  if (ec) {
+    mz_zip_writer_end(&zip);
+    error = "failed to walk " + src_dir.string() + ": " + ec.message();
+    return false;
+  }
+  for (const auto& entry : it) {
+    if (!entry.is_regular_file(ec) || ec) {
+      continue;
+    }
+    // Entry names are relative and forward slashed; generic_string() gives
+    // both, and is what ExtractZip's own path handling expects to see.
+    const std::string name = std::filesystem::relative(entry.path(), src_dir, ec).generic_string();
+    if (ec || name.empty()) {
+      continue;
+    }
+    if (!mz_zip_writer_add_file(&zip, name.c_str(), entry.path().string().c_str(), nullptr, 0,
+                                MZ_DEFAULT_COMPRESSION)) {
+      ok = false;
+      error = "failed to add " + name + " to the archive";
+      break;
+    }
+  }
+
+  if (ok && !mz_zip_writer_finalize_archive(&zip)) {
+    ok = false;
+    error = "failed to finalize the archive";
+  }
+  mz_zip_writer_end(&zip);
+  if (!ok) {
+    std::filesystem::remove(archive, ec);
+  }
+  return ok;
+}
+
 bool MoveOrCopyDirectory(const std::filesystem::path& from, const std::filesystem::path& to,
                          std::string& error) {
   constexpr int kMaxAttempts = 5;
