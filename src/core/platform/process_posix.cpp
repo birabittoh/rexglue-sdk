@@ -18,7 +18,9 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
 
 #include <chrono>
 #include <cerrno>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -29,6 +31,11 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
 #include <sys/wait.h>
 #include <unistd.h>
 
+#if REX_PLATFORM_MAC
+#include <crt_externs.h>
+#include <mach-o/dyld.h>
+#endif
+
 namespace rex::platform::process {
 
 namespace {
@@ -36,11 +43,13 @@ namespace {
 // side this is just an inherited environment variable (setenv() before
 // fork()+execv() below), same handoff trick as the Windows implementation.
 constexpr const char* kRelaunchFromPidEnvVar = "REX_RELAUNCH_FROM_PID";
-}  // namespace
 
-bool Relaunch() {
+// The original argv, and the running binary's own path: argv[0] may be a
+// relative or PATH-resolved name that no longer resolves from here. Both are
+// read back from the OS rather than stashed at startup, so this stays usable
+// from anywhere without threading argv through every caller.
+bool ReadOwnCommandLine(std::vector<std::string>& args, std::string& executable) {
 #if REX_PLATFORM_LINUX
-  setenv(kRelaunchFromPidEnvVar, std::to_string(getpid()).c_str(), 1);
   // /proc/self/cmdline holds the original argv, NUL-separated; there's no
   // Linux equivalent of Win32's GetCommandLineW() to re-fetch it otherwise.
   std::ifstream cmdline_file("/proc/self/cmdline", std::ios::binary);
@@ -53,8 +62,6 @@ bool Relaunch() {
     REXLOG_ERROR("Relaunch: /proc/self/cmdline was empty");
     return false;
   }
-
-  std::vector<std::string> args;
   size_t start = 0;
   while (start < raw.size()) {
     size_t nul = raw.find('\0', start);
@@ -64,6 +71,46 @@ bool Relaunch() {
     args.emplace_back(raw.substr(start, nul - start));
     start = nul + 1;
   }
+  executable = "/proc/self/exe";
+  return true;
+#else
+  // macOS has no /proc: the dyld interfaces are how a process reaches its own
+  // argv and image path there.
+  int argc = *_NSGetArgc();
+  char** argv = *_NSGetArgv();
+  if (argc <= 0 || !argv) {
+    REXLOG_ERROR("Relaunch: _NSGetArgv returned no arguments");
+    return false;
+  }
+  for (int i = 0; i < argc; ++i) {
+    args.emplace_back(argv[i] ? argv[i] : "");
+  }
+
+  uint32_t size = 0;
+  _NSGetExecutablePath(nullptr, &size);  // fails, but fills in the size needed.
+  std::string path(size, '\0');
+  if (size == 0 || _NSGetExecutablePath(path.data(), &size) != 0) {
+    REXLOG_ERROR("Relaunch: _NSGetExecutablePath failed");
+    return false;
+  }
+  path.resize(std::strlen(path.c_str()));
+  // Inside a bundle this is Foo.app/Contents/MacOS/foo, which is what has to
+  // be exec'd for the relaunched process to still be the bundled app.
+  executable = std::move(path);
+  return true;
+#endif
+}
+
+}  // namespace
+
+bool Relaunch() {
+  std::vector<std::string> args;
+  std::string executable;
+  if (!ReadOwnCommandLine(args, executable)) {
+    return false;
+  }
+
+  setenv(kRelaunchFromPidEnvVar, std::to_string(getpid()).c_str(), 1);
 
   std::vector<char*> argv;
   argv.reserve(args.size() + 1);
@@ -78,20 +125,13 @@ bool Relaunch() {
     return false;
   }
   if (pid == 0) {
-    // Child: re-exec via /proc/self/exe (the running binary, even if argv[0]
-    // was a relative/PATH-resolved name that no longer resolves from here).
-    execv("/proc/self/exe", argv.data());
+    execv(executable.c_str(), argv.data());
     _exit(127);  // execv only returns on failure.
   }
   return true;
-#else
-  REXLOG_ERROR("Relaunch: not implemented on this platform");
-  return false;
-#endif
 }
 
 void WaitForPreviousInstanceExit() {
-#if REX_PLATFORM_LINUX
   const char* pid_string = getenv(kRelaunchFromPidEnvVar);
   if (!pid_string || !*pid_string) {
     return;  // not a relaunch; nothing to wait on.
@@ -118,7 +158,6 @@ void WaitForPreviousInstanceExit() {
     }
     std::this_thread::sleep_for(kPollInterval);
   }
-#endif
 }
 
 bool OpenFolder(const std::filesystem::path& path) {
