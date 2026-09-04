@@ -481,6 +481,17 @@ void Window::OnSurfaceChanged(bool new_surface_potentially_exists) {
   }
 }
 
+void Window::NotifySurfaceLifecycle(bool restored) {
+  WindowDestructionReceiver destruction_receiver(this);
+  UIEvent e(this);
+  if (restored) {
+    SendEventToListeners([&e](auto listener) { listener->OnSurfaceRestored(e); },
+                         destruction_receiver);
+  } else {
+    SendEventToListeners([&e](auto listener) { listener->OnSurfaceLost(e); }, destruction_receiver);
+  }
+}
+
 void Window::OnBeforeClose(WindowDestructionReceiver& destruction_receiver) {
   // Because events are not sent from closed windows, and to make sure the
   // window isn't closed while its surface is still attached to the presenter,

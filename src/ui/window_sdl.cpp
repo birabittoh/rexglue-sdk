@@ -629,6 +629,21 @@ void WindowSDL::HandleWindowEvent(SDL_Event& event) {
   }
 }
 
+void WindowSDL::HandleLifecycleEvent(bool entering_foreground) {
+  // SDL releases the ANativeWindow in onNativeSurfaceDestroyed and clears
+  // SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, but only recreates an EGL surface
+  // itself; on the Vulkan path it raises no window event at all, so without
+  // this the presenter keeps a swapchain on a surface that no longer exists
+  // and the window stays black on resume while everything else keeps running.
+  //
+  // The foreground event is a safe point to reattach: SDLActivity only calls
+  // nativeResume once mSurface.mIsSurfaceReady, so the new native window is
+  // already published by the time this arrives.
+  OnSurfaceChanged(entering_foreground);
+
+  NotifySurfaceLifecycle(entering_foreground);
+}
+
 void WindowSDL::HandleDropEvent(SDL_Event& event) {
   WindowDestructionReceiver destruction_receiver(this);
   FileDropEvent e(this, std::filesystem::path(event.drop.data));

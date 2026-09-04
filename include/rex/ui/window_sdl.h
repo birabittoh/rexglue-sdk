@@ -46,6 +46,10 @@ class WindowSDL final : public Window {
   void HandleTextInputEvent(SDL_Event& event);
   void HandleMouseEvent(SDL_Event& event);
   void HandleTouchEvent(SDL_Event& event);
+  // Android destroys the window surface when the app is backgrounded (which
+  // includes anything taking window focus, such as a dialog) and hands out a
+  // new one on resume. Nothing else reattaches the presenter to it.
+  void HandleLifecycleEvent(bool entering_foreground);
   void HandleDropEvent(SDL_Event& event);
   void HandlePaintEvent();
 

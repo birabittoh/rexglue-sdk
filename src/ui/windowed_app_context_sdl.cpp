@@ -204,6 +204,27 @@ void SDLWindowedAppContext::ProcessEvent(SDL_Event& event) {
 
 bool SDLCALL SDLWindowedAppContext::WatchEvent(void* userdata, SDL_Event* event) {
   auto* context = static_cast<SDLWindowedAppContext*>(userdata);
+  // App lifecycle events have to be handled here rather than in ProcessEvent:
+  // SDL_SendAppEvent deliberately does not queue them ("it needs to be handled
+  // in this call stack by an event watcher"), so no SDL_WaitEvent loop can
+  // ever see them.
+  //
+  // Android destroys the window surface around this pair and hands out a new
+  // one on resume, which is what the window needs to know about. The call
+  // stack here is Android_PumpEvents on the SDL main thread, so this is
+  // normally already the UI thread; the other platforms that raise these
+  // events make no such promise, hence the marshalling fallback.
+  if (event->type == SDL_EVENT_WILL_ENTER_BACKGROUND ||
+      event->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
+    const bool foreground = event->type == SDL_EVENT_DID_ENTER_FOREGROUND;
+    if (WindowSDL* window = context->GetWindowOrSole(0)) {
+      if (context->IsInUIThread()) {
+        window->HandleLifecycleEvent(foreground);
+      } else {
+        context->CallInUIThread([window, foreground] { window->HandleLifecycleEvent(foreground); });
+      }
+    }
+  }
   if (event->type == SDL_EVENT_QUIT && SDL_IsMainThread() && context->IsInUIThread()) {
     // Cocoa stops making Metal drawables available as part of its termination
     // request. Handle the request synchronously while SDL is queueing it,

@@ -584,6 +584,12 @@ class Window {
   // on) as no virtual functions (including CreateSurface) will be called.
   // This function is nonvirtual itself for this reason as well.
   void OnSurfaceChanged(bool new_surface_potentially_exists);
+
+  // Tells listeners the native surface went away or came back, for renderers
+  // that own a swap chain rather than going through the Presenter. Separate
+  // from OnSurfaceChanged because that also runs on open and close, where
+  // there is no surface to rebuild against.
+  void NotifySurfaceLifecycle(bool restored);
   // Called only for an open window.
   virtual std::unique_ptr<Surface> CreateSurfaceImpl(Surface::TypeFlags allowed_types) = 0;
   // Called only if the Surface exists.

@@ -43,6 +43,16 @@ class WindowListener {
   virtual void OnLostFocus(UISetupEvent&) {}
 
   virtual void OnFileDrop(FileDropEvent&) {}
+
+  // Android destroys the window surface whenever the app stops being the
+  // focused foreground activity (a task switch, but also anything taking
+  // window focus, such as a dialog) and supplies a brand new one on resume.
+  // The Presenter is reattached automatically; a renderer that owns its own
+  // swap chain instead has to rebuild it against the new native window, which
+  // GetNativeWindowHandle() only returns correctly once OnSurfaceRestored has
+  // been delivered.
+  virtual void OnSurfaceLost(UIEvent&) {}
+  virtual void OnSurfaceRestored(UIEvent&) {}
 };
 
 class WindowInputListener {
