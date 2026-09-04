@@ -30,6 +30,7 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
+#include <rex/ui/image_decode.h>
 
 #if REX_PLATFORM_ANDROID
 #include <rex/platform.h>
@@ -124,6 +125,15 @@ std::vector<std::filesystem::path> GetPreExtractedCandidates() {
 // Progress feedback for the long-running steps
 // =============================================================================
 
+/// Theme and icon for ProgressWindow, set once from GameDataSelectorSettings
+/// at the top of EnsureGameDataImpl. A global rather than a parameter thread
+/// through ExtractIsoTo/ExtractXblaTo/ExtractTitleUpdateTo: those construct
+/// their own ProgressReporter deep in extraction and have no other reason to
+/// see the settings object.
+ProgressWindowTheme g_progress_theme;
+const void* g_progress_icon_data = nullptr;
+size_t g_progress_icon_size = 0;
+
 /// A throwaway window with a progress bar, for the phase before the app has a
 /// window of its own.
 ///
@@ -166,9 +176,31 @@ class ProgressWindow {
     }
     REXLOG_INFO("Progress window up, using the '{}' render backend",
                 SDL_GetRendererName(renderer_));
+
+    if (g_progress_icon_data && g_progress_icon_size) {
+      int icon_w = 0, icon_h = 0;
+      std::vector<uint8_t> rgba = rex::ui::DecodeImageRGBA(
+          static_cast<const uint8_t*>(g_progress_icon_data), g_progress_icon_size, icon_w, icon_h);
+      if (!rgba.empty()) {
+        SDL_Surface* surface =
+            SDL_CreateSurfaceFrom(icon_w, icon_h, SDL_PIXELFORMAT_RGBA32, rgba.data(), icon_w * 4);
+        if (surface) {
+          icon_texture_ = SDL_CreateTextureFromSurface(renderer_, surface);
+          SDL_DestroySurface(surface);
+          if (icon_texture_) {
+            SDL_SetTextureScaleMode(icon_texture_, SDL_SCALEMODE_LINEAR);
+          }
+        }
+      } else {
+        REXLOG_WARN("Progress window: failed to decode icon image");
+      }
+    }
   }
 
   ~ProgressWindow() {
+    if (icon_texture_) {
+      SDL_DestroyTexture(icon_texture_);
+    }
     if (renderer_) {
       SDL_DestroyRenderer(renderer_);
     }
@@ -215,26 +247,42 @@ class ProgressWindow {
     const float w = static_cast<float>(out_w) / scale;
     const float h = static_cast<float>(out_h) / scale;
 
-    SDL_SetRenderDrawColor(renderer_, 18, 18, 22, 255);
+    const auto& bg = g_progress_theme.background;
+    const auto& fill = g_progress_theme.bar_fill;
+    const auto& frame_color = g_progress_theme.bar_frame;
+    const auto& title_color = g_progress_theme.title_text;
+    const auto& detail_color = g_progress_theme.detail_text;
+
+    SDL_SetRenderDrawColor(renderer_, bg[0], bg[1], bg[2], 255);
     SDL_RenderClear(renderer_);
 
     const float bar_w = std::min(w - 40.0f, 480.0f);
     const float bar_x = (w - bar_w) / 2.0f;
     const float bar_h = 18.0f;
-    const float bar_y = h / 2.0f - bar_h / 2.0f;
 
-    SDL_SetRenderDrawColor(renderer_, 230, 230, 235, 255);
+    // The icon sits above the bar and pushes it down to make room, rather
+    // than overlapping the vertical center used when there is no icon.
+    float bar_y = h / 2.0f - bar_h / 2.0f;
+    if (icon_texture_) {
+      const float icon_size = std::min(h * 0.35f, 96.0f);
+      bar_y = h / 2.0f - bar_h / 2.0f + icon_size * 0.5f + 18.0f;
+      const SDL_FRect icon_rect{(w - icon_size) / 2.0f, bar_y - icon_size - 44.0f, icon_size,
+                                icon_size};
+      SDL_RenderTexture(renderer_, icon_texture_, nullptr, &icon_rect);
+    }
+
+    SDL_SetRenderDrawColor(renderer_, title_color[0], title_color[1], title_color[2], 255);
     SDL_RenderDebugText(renderer_, bar_x, bar_y - 26.0f, title.c_str());
     if (!detail.empty()) {
-      SDL_SetRenderDrawColor(renderer_, 150, 150, 160, 255);
+      SDL_SetRenderDrawColor(renderer_, detail_color[0], detail_color[1], detail_color[2], 255);
       SDL_RenderDebugText(renderer_, bar_x, bar_y + bar_h + 12.0f, detail.c_str());
     }
 
     SDL_FRect frame{bar_x, bar_y, bar_w, bar_h};
-    SDL_SetRenderDrawColor(renderer_, 90, 90, 100, 255);
+    SDL_SetRenderDrawColor(renderer_, frame_color[0], frame_color[1], frame_color[2], 255);
     SDL_RenderRect(renderer_, &frame);
 
-    SDL_SetRenderDrawColor(renderer_, 90, 160, 240, 255);
+    SDL_SetRenderDrawColor(renderer_, fill[0], fill[1], fill[2], 255);
     if (fraction >= 0.0f && fraction <= 1.0f) {
       SDL_FRect fill{bar_x + 2.0f, bar_y + 2.0f, (bar_w - 4.0f) * fraction, bar_h - 4.0f};
       SDL_RenderFillRect(renderer_, &fill);
@@ -254,6 +302,7 @@ class ProgressWindow {
  private:
   SDL_Window* window_ = nullptr;
   SDL_Renderer* renderer_ = nullptr;
+  SDL_Texture* icon_texture_ = nullptr;
   bool owns_video_ = false;
 };
 
@@ -1700,6 +1749,10 @@ static bool ProcessTitleUpdate(const std::filesystem::path& dir,
 namespace {
 
 bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
+  g_progress_theme = settings.progress_theme;
+  g_progress_icon_data = settings.progress_icon_data;
+  g_progress_icon_size = settings.progress_icon_size;
+
 #if REX_PLATFORM_ANDROID
   RemoveLegacyImportCopy();
 #endif

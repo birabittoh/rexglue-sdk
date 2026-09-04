@@ -1,10 +1,23 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
 
 namespace rex::system {
+
+/// Colors for the progress window shown during extraction, as {R, G, B}
+/// bytes. Defaults match the SDK's own neutral dark theme; a guest app can
+/// retheme it to match its own overlay without touching SDL directly.
+struct ProgressWindowTheme {
+  uint8_t background[3] = {18, 18, 22};
+  uint8_t bar_fill[3] = {90, 160, 240};
+  uint8_t bar_frame[3] = {90, 90, 100};
+  uint8_t title_text[3] = {230, 230, 235};
+  uint8_t detail_text[3] = {150, 150, 160};
+};
 
 /// Configuration for GameDataSelector, set by the guest application.
 struct GameDataSelectorSettings {
@@ -24,6 +37,17 @@ struct GameDataSelectorSettings {
   /// is derived from the executable name (`<exe stem>.toml` next to the
   /// executable).
   std::filesystem::path config_path;
+
+  /// Colors for the extraction progress window. Defaults to the SDK's
+  /// neutral dark theme.
+  ProgressWindowTheme progress_theme;
+
+  /// Optional icon drawn above the progress bar while extraction runs, as
+  /// encoded image bytes (PNG, etc. — anything rex::ui::DecodeImageRGBA
+  /// accepts). Not owned; must outlive the EnsureGameData call. Left null to
+  /// show no icon.
+  const void* progress_icon_data = nullptr;
+  size_t progress_icon_size = 0;
 };
 
 /// Synchronous startup wizard that runs BEFORE any window or presenter is
