@@ -215,6 +215,19 @@ void TouchInputDriver::ReleaseAll() {
   stick_states_.assign(layout_.sticks.size(), StickState());
 }
 
+void TouchInputDriver::ReleaseFinger(FingerTargetMap::iterator it) {
+  const size_t index = it->second.index;
+  if (it->second.kind == FingerTarget::Kind::kStick) {
+    if (index < stick_states_.size()) {
+      stick_states_[index] = StickState();
+    }
+  } else if (index < control_buttons_.size()) {
+    pressed_mask_ &= ~(uint64_t(1) << index);
+    control_buttons_[index] = 0;
+  }
+  finger_targets_.erase(it);
+}
+
 void TouchInputDriver::RefreshLayout() {
   if (!attached_window_ || !layout_provider_) {
     return;
@@ -233,7 +246,12 @@ void TouchInputDriver::RefreshLayout() {
 }
 
 void TouchInputDriver::OnTouchEvent(rex::ui::TouchEvent& e) {
-  if (!REXCVAR_GET(touch_controls) || !is_active()) {
+  const bool releasing = e.action() == rex::ui::TouchEvent::Action::kUp ||
+                         e.action() == rex::ui::TouchEvent::Action::kCancel;
+  // A release is always processed: the gate can close between a press and its
+  // release (the controls are switched off, an overlay takes the input), and a
+  // finger dropped that way would stay held and its stick drawn for good.
+  if (!releasing && (!REXCVAR_GET(touch_controls) || !is_active())) {
     return;
   }
 
@@ -252,6 +270,12 @@ void TouchInputDriver::OnTouchEvent(rex::ui::TouchEvent& e) {
 
   switch (e.action()) {
     case rex::ui::TouchEvent::Action::kDown: {
+      // A press on an id that is still held means its release never arrived,
+      // so let go of whatever it had before it claims anything new.
+      if (auto stale = finger_targets_.find(id); stale != finger_targets_.end()) {
+        ReleaseFinger(stale);
+        ++packet_number_;
+      }
       for (size_t i = 0; i < layout_.controls.size(); ++i) {
         if (!HitTest(layout_.controls[i], x, y)) {
           continue;
@@ -321,14 +345,7 @@ void TouchInputDriver::OnTouchEvent(rex::ui::TouchEvent& e) {
       if (it == finger_targets_.end()) {
         break;
       }
-      const size_t index = it->second.index;
-      if (it->second.kind == FingerTarget::Kind::kStick) {
-        stick_states_[index] = StickState();
-      } else {
-        pressed_mask_ &= ~(uint64_t(1) << index);
-        control_buttons_[index] = 0;
-      }
-      finger_targets_.erase(it);
+      ReleaseFinger(it);
       ++packet_number_;
       e.set_handled(true);
       break;
@@ -336,12 +353,19 @@ void TouchInputDriver::OnTouchEvent(rex::ui::TouchEvent& e) {
   }
 }
 
-bool TouchInputDriver::GetVisualState(TouchVisualState* out_state) const {
+bool TouchInputDriver::GetVisualState(TouchVisualState* out_state) {
   if (!out_state || !REXCVAR_GET(touch_controls)) {
     return false;
   }
   std::lock_guard<std::mutex> lock(state_mutex_);
   if (!layout_provider_ || surface_width_ <= 0.0f || surface_height_ <= 0.0f) {
+    return false;
+  }
+  if (!is_active()) {
+    // Events stop arriving while the gate is shut, so a finger that was down
+    // when it closed has no way to report its release. Drop them here, on the
+    // frame that notices, rather than leaving a stick drawn.
+    ReleaseAll();
     return false;
   }
   out_state->pressed_mask = pressed_mask_;

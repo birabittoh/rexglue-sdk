@@ -196,7 +196,7 @@ class TouchInputDriver final : public InputDriver, public rex::ui::WindowInputLi
 
   /// Snapshot for whatever draws the pad. Returns false when there is nothing
   /// to draw.
-  bool GetVisualState(TouchVisualState* out_state) const;
+  bool GetVisualState(TouchVisualState* out_state);
 
  private:
   // Recomputes layout_ for the attached window's current size. UI thread only,
@@ -211,6 +211,11 @@ class TouchInputDriver final : public InputDriver, public rex::ui::WindowInputLi
     enum class Kind { kControl, kStick } kind;
     size_t index;
   };
+
+  using FingerTargetMap = std::unordered_map<uint32_t, FingerTarget>;
+
+  // Lets go of one finger and forgets it. state_mutex_ must be held.
+  void ReleaseFinger(FingerTargetMap::iterator it);
 
   // Live state of one stick, in surface pixels.
   struct StickState {
@@ -228,7 +233,7 @@ class TouchInputDriver final : public InputDriver, public rex::ui::WindowInputLi
   float surface_width_ = 0.0f;
   float surface_height_ = 0.0f;
 
-  std::unordered_map<uint32_t, FingerTarget> finger_targets_;
+  FingerTargetMap finger_targets_;
 
   uint64_t pressed_mask_ = 0;
   // Parallel to layout_.controls; see TouchVisualState::control_buttons.
