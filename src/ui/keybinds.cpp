@@ -107,6 +107,7 @@ static const std::unordered_map<std::string, VirtualKey> kKeyNames = {
     {"Backspace", VirtualKey::kBack},
     {"Delete", VirtualKey::kDelete},
     {"Insert", VirtualKey::kInsert},
+    {"BrowserBack", VirtualKey::kBrowserBack},
     {"Home", VirtualKey::kHome},
     {"End", VirtualKey::kEnd},
     {"PageUp", VirtualKey::kPrior},

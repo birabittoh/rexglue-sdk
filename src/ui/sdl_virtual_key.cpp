@@ -126,6 +126,8 @@ VirtualKey TranslateSDLScancode(SDL_Scancode scancode) {
       return VirtualKey::kOem6;
     case SDL_SCANCODE_APOSTROPHE:
       return VirtualKey::kOem7;
+    case SDL_SCANCODE_AC_BACK:
+      return VirtualKey::kBrowserBack;
     default:
       return VirtualKey::kNone;
   }

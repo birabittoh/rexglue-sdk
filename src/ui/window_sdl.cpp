@@ -160,6 +160,13 @@ bool WindowSDL::OpenImpl() {
   // Belt and braces: this hint is consulted ahead of the window aspect and
   // survives any later resize.
   SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+  // Without this the system handles back itself (backgrounding the app) and
+  // SDL never sees it. Trapping delivers it as a normal
+  // SDL_SCANCODE_AC_BACK key event instead, so it can drive the host menu
+  // like any other bind; the host menu bind's own handler is responsible for
+  // offering a way to actually background/exit, since trapping removes the
+  // system's default handling of the gesture.
+  SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
   // Fullscreen is not a choice here, so the `fullscreen` cvar does not apply.
   // The activity always fills the display; what a non-fullscreen SDL window
   // actually selects is whether the status and navigation bars are drawn on
