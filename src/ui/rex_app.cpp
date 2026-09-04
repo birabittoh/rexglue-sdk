@@ -259,7 +259,13 @@ void ReXApp::RefreshPathDefaultsIfCvarsChanged() {
 static std::filesystem::path AppSettingsFolder(std::string_view app_name) {
   const std::filesystem::path exe_dir = rex::filesystem::GetExecutableFolder();
 
-#if REX_PLATFORM_MAC
+#if REX_PLATFORM_ANDROID
+  // The executable folder is internal storage, which the user cannot reach.
+  // Put the config and logs in the user folder (app specific external
+  // storage) so they can be read and edited off the device.
+  (void)app_name;
+  return rex::filesystem::GetUserFolder();
+#elif REX_PLATFORM_MAC
   const std::filesystem::path contents = exe_dir.parent_path();
   const bool in_bundle = exe_dir.filename() == "MacOS" && contents.filename() == "Contents" &&
                          contents.parent_path().extension() == ".app";

@@ -101,12 +101,37 @@ std::filesystem::path GetExecutablePath() {
 #endif
 }
 
+#if REX_PLATFORM_ANDROID
+// Package name, as reported by /proc/self/cmdline (argv[0] on Android).
+static std::string AndroidPackageName() {
+  std::string package;
+  if (std::ifstream f("/proc/self/cmdline"); f) {
+    std::getline(f, package, '\0');
+  }
+  return package;
+}
+
+// Internal storage: /data/data/<package>/files. Always writable, but only
+// reachable over adb when the APK is debuggable.
+static std::filesystem::path AndroidInternalFolder() {
+  const std::string package = AndroidPackageName();
+  if (!package.empty()) {
+    return std::filesystem::path("/data/data") / package / "files";
+  }
+  // HOME is usually set to the app's data directory by the Android runtime.
+  if (auto home = rex::platform::env::get("HOME")) {
+    return std::filesystem::path(*home);
+  }
+  return "/data/local/tmp";
+}
+#endif
+
 std::filesystem::path GetExecutableFolder() {
 #if REX_PLATFORM_ANDROID
   // On Android /proc/self/exe points to /system/bin/app_process64, which is
   // meaningless for app-relative paths. Return the app's internal files
-  // directory instead — this is where configs, logs, and sidecar files live.
-  return GetUserFolder();
+  // directory instead, where the Java side stages bundled assets.
+  return AndroidInternalFolder();
 #else
   return GetExecutablePath().parent_path();
 #endif
@@ -114,25 +139,25 @@ std::filesystem::path GetExecutableFolder() {
 
 std::filesystem::path GetUserFolder() {
 #if REX_PLATFORM_ANDROID
-  // On Android, the app's internal data directory is always at
-  // /data/data/<package>/files/ (or /data/user/0/<package>/files/ on
-  // multi-user devices, which is a symlink to the same place).
-  // We can't use SDL_GetPrefPath here because rexcore doesn't link SDL3.
-  // Instead, read the path from /proc/self/cmdline (which gives the
-  // package name on Android) and derive the internal storage path.
-  std::string package;
-  if (std::ifstream f("/proc/self/cmdline"); f) {
-    std::getline(f, package, '\0');
-  }
+  // App specific external storage, so configs, logs and saves can be pulled
+  // off the device without a debuggable build. No permission needed, and
+  // reachable over adb and MTP. A user chosen directory is not an option: on
+  // API 30+ that means SAF, which yields content:// URIs rather than paths.
+  // SDL_GetAndroidExternalStoragePath is not usable here because rexcore does
+  // not link SDL3, so the path is derived: the Android uid encodes the user id
+  // as uid / 100000, and the package name comes from /proc/self/cmdline.
+  const std::string package = AndroidPackageName();
   if (!package.empty()) {
-    return std::filesystem::path("/data/data") / package / "files";
+    std::filesystem::path external = std::filesystem::path("/storage/emulated") /
+                                     std::to_string(getuid() / 100000) / "Android" / "data" /
+                                     package / "files";
+    std::error_code ec;
+    std::filesystem::create_directories(external, ec);
+    if (!ec && access(external.c_str(), W_OK) == 0) {
+      return external;
+    }
   }
-  // Fallback: HOME is usually set to the app's data directory by the
-  // Android runtime.
-  if (auto home = rex::platform::env::get("HOME")) {
-    return std::filesystem::path(*home);
-  }
-  return "/data/local/tmp";
+  return AndroidInternalFolder();
 #endif
   // get preferred data home
   if (auto xdg = rex::platform::env::get("XDG_DATA_HOME")) {
