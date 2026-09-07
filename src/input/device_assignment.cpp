@@ -13,6 +13,40 @@
 
 namespace rex::input {
 
+void ConfigurableAssignment::OnDevicesChanged(const std::vector<DeviceInfo>& devices) {
+  devices_.clear();
+  devices_.reserve(devices.size());
+  std::unordered_map<DeviceId, uint32_t> live_users;
+  for (const auto& device : devices) {
+    devices_.push_back(device.id);
+    auto existing = users_.find(device.id);
+    live_users.emplace(device.id, existing == users_.end() ? 0 : existing->second);
+  }
+  users_ = std::move(live_users);
+}
+
+void ConfigurableAssignment::DevicesForUser(uint32_t user_index, std::vector<DeviceId>& out) const {
+  out.clear();
+  if (user_index >= kMaxGuestUsers) {
+    return;
+  }
+  for (DeviceId id : devices_) {
+    auto it = users_.find(id);
+    if (it != users_.end() && it->second == user_index) {
+      out.push_back(id);
+    }
+  }
+}
+
+bool ConfigurableAssignment::AssignDevice(DeviceId id, uint32_t user_index) {
+  auto it = users_.find(id);
+  if (it == users_.end() || (user_index >= kMaxGuestUsers && user_index != kGuestUserUnassigned)) {
+    return false;
+  }
+  it->second = user_index;
+  return true;
+}
+
 void SlotAssignment::OnDevicesChanged(const std::vector<DeviceInfo>& devices) {
   for (auto& user : users_) {
     user.clear();

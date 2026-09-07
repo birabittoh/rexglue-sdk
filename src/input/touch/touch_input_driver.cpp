@@ -412,6 +412,7 @@ void TouchInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
   info.id = kTouchDevice;
   info.name = "Touch Controls";
   info.synthetic = true;
+  info.kind = DeviceKind::kTouch;
   out.push_back(info);
 }
 

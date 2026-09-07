@@ -41,6 +41,7 @@ void NopInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
   info.id = kNopDevice;
   info.name = "None";
   info.synthetic = true;
+  info.kind = DeviceKind::kPlaceholder;
   out.push_back(info);
 }
 

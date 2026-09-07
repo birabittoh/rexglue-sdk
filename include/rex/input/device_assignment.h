@@ -11,6 +11,7 @@
  */
 
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include <rex/input/device.h>
@@ -26,6 +27,22 @@ class DeviceAssignment {
 
   /// An empty result means the guest sees X_ERROR_DEVICE_NOT_CONNECTED.
   virtual void DevicesForUser(uint32_t user_index, std::vector<DeviceId>& out) const = 0;
+
+  /// Changes one live device's guest user. kGuestUserUnassigned ignores it.
+  /// Policies that do not support runtime assignment return false.
+  virtual bool AssignDevice(DeviceId, uint32_t) { return false; }
+};
+
+/// Every new device feeds user 0 until the host assigns it to another user.
+class ConfigurableAssignment final : public DeviceAssignment {
+ public:
+  void OnDevicesChanged(const std::vector<DeviceInfo>& devices) override;
+  void DevicesForUser(uint32_t user_index, std::vector<DeviceId>& out) const override;
+  bool AssignDevice(DeviceId id, uint32_t user_index) override;
+
+ private:
+  std::vector<DeviceId> devices_;
+  std::unordered_map<DeviceId, uint32_t> users_;
 };
 
 /// Device ordinal N feeds guest user N. Synthetic devices feed user 0.

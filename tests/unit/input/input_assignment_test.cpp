@@ -13,11 +13,13 @@
 using rex::X_RESULT;
 using rex::X_STATUS;
 
+using rex::input::ConfigurableAssignment;
 using rex::input::DeviceAssignment;
 using rex::input::DeviceId;
 using rex::input::DeviceInfo;
 using rex::input::InputDriver;
 using rex::input::InputSystem;
+using rex::input::kGuestUserUnassigned;
 using rex::input::SharedAssignment;
 using rex::input::SlotAssignment;
 using rex::input::X_INPUT_CAPABILITIES;
@@ -133,6 +135,20 @@ TEST_CASE("SharedAssignment puts every device on user 0", "[input]") {
   REQUIRE(For(shared, 0) ==
           std::vector<DeviceId>{static_cast<DeviceId>(10), static_cast<DeviceId>(11)});
   REQUIRE(For(shared, 1).empty());
+}
+
+TEST_CASE("ConfigurableAssignment defaults devices to user 0 and moves them", "[input]") {
+  ConfigurableAssignment configurable;
+  configurable.OnDevicesChanged({Pad(10, 0), Pad(11, 1)});
+
+  REQUIRE(For(configurable, 0) ==
+          std::vector<DeviceId>{static_cast<DeviceId>(10), static_cast<DeviceId>(11)});
+  REQUIRE(configurable.AssignDevice(static_cast<DeviceId>(11), 2));
+  REQUIRE(For(configurable, 0) == std::vector<DeviceId>{static_cast<DeviceId>(10)});
+  REQUIRE(For(configurable, 2) == std::vector<DeviceId>{static_cast<DeviceId>(11)});
+  REQUIRE(configurable.AssignDevice(static_cast<DeviceId>(11), kGuestUserUnassigned));
+  REQUIRE(For(configurable, 2).empty());
+  REQUIRE_FALSE(configurable.AssignDevice(static_cast<DeviceId>(11), 4));
 }
 
 TEST_CASE("SlotAssignment does not renumber survivors when a pad is unplugged", "[input]") {

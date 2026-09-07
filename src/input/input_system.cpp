@@ -223,10 +223,40 @@ void InputSystem::SetForceActive(bool force) {
 }
 
 void InputSystem::SetDeviceAssignment(std::unique_ptr<DeviceAssignment> assignment) {
+  std::lock_guard lock(devices_mutex_);
   assignment_ = std::move(assignment);
   if (assignment_) {
     assignment_->OnDevicesChanged(devices_);
   }
+}
+
+std::vector<InputSystem::DeviceView> InputSystem::SnapshotDevices() {
+  std::lock_guard lock(devices_mutex_);
+  RefreshDevices();
+
+  std::vector<DeviceView> result;
+  result.reserve(devices_.size());
+  for (const auto& device : devices_) {
+    DeviceView view;
+    view.device = device;
+    if (assignment_) {
+      for (uint32_t user = 0; user < kMaxGuestUsers; user++) {
+        std::vector<DeviceId> ids;
+        assignment_->DevicesForUser(user, ids);
+        if (std::find(ids.begin(), ids.end(), device.id) != ids.end()) {
+          view.guest_user_mask |= 1u << user;
+        }
+      }
+    }
+    result.push_back(std::move(view));
+  }
+  return result;
+}
+
+bool InputSystem::AssignDeviceToUser(DeviceId id, uint32_t user_index) {
+  std::lock_guard lock(devices_mutex_);
+  RefreshDevices();
+  return assignment_ && assignment_->AssignDevice(id, user_index);
 }
 
 void InputSystem::RefreshDevices() {
@@ -338,6 +368,7 @@ const DeviceInfo* InputSystem::DeviceInfoFor(DeviceId id) const {
 X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
                                       X_INPUT_CAPABILITIES* out_caps) {
   SCOPE_profile_cpu_f("hid");
+  std::lock_guard lock(devices_mutex_);
   if (!out_caps || !assignment_) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
@@ -365,6 +396,7 @@ X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
 
 X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
   SCOPE_profile_cpu_f("hid");
+  std::lock_guard lock(devices_mutex_);
   if (!assignment_) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
@@ -421,6 +453,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
 
 X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration) {
   SCOPE_profile_cpu_f("hid");
+  std::lock_guard lock(devices_mutex_);
   if (!assignment_) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
@@ -463,6 +496,7 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
 X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
                                    X_INPUT_KEYSTROKE* out_keystroke) {
   SCOPE_profile_cpu_f("hid");
+  std::lock_guard lock(devices_mutex_);
   if (!assignment_) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
@@ -528,7 +562,7 @@ std::unique_ptr<InputSystem> CreateDefaultInputSystem(bool tool_mode) {
   // NOP driver (primary in tool mode, fallback otherwise)
   uint8_t nop_index = tool_mode ? 0 : 1;
   input->AddDriver(std::make_unique<nop::NopInputDriver>(nullptr, nop_index));
-  input->SetDeviceAssignment(std::make_unique<SlotAssignment>());
+  input->SetDeviceAssignment(std::make_unique<ConfigurableAssignment>());
   return input;
 }
 

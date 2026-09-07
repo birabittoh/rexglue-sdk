@@ -11,6 +11,7 @@
  */
 
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include <rex/input/device_assignment.h>
@@ -27,6 +28,11 @@ namespace rex::input {
 
 class InputSystem : public system::IInputSystem {
  public:
+  struct DeviceView {
+    DeviceInfo device;
+    uint32_t guest_user_mask = 0;
+  };
+
   explicit InputSystem(rex::ui::Window* window);
   ~InputSystem() override;
 
@@ -73,6 +79,15 @@ class InputSystem : public system::IInputSystem {
   void SetGuestInputSuppressed(bool suppressed) { guest_input_suppressed_ = suppressed; }
   bool IsGuestInputSuppressed() const { return guest_input_suppressed_; }
 
+  /// Returns the currently connected host input devices and the guest users
+  /// each one feeds. Safe for host UI and diagnostics to call while the guest
+  /// is polling input.
+  std::vector<DeviceView> SnapshotDevices();
+
+  /// Routes a connected host device to one guest controller slot. Pass
+  /// kGuestUserUnassigned to keep the device connected but ignore its input.
+  bool AssignDeviceToUser(DeviceId id, uint32_t user_index);
+
   X_RESULT GetCapabilities(uint32_t user_index, uint32_t flags, X_INPUT_CAPABILITIES* out_caps);
   X_RESULT GetState(uint32_t user_index, X_INPUT_STATE* out_state);
   X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
@@ -98,6 +113,7 @@ class InputSystem : public system::IInputSystem {
   std::vector<InputDriver*> device_owners_;
 
   bool guest_input_suppressed_ = false;
+  std::mutex devices_mutex_;
 };
 
 /// Create a default InputSystem with SDL + NOP drivers.

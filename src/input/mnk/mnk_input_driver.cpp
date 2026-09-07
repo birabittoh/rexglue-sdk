@@ -231,6 +231,7 @@ void MnkInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
   info.id = kMnkDevice;
   info.name = "Keyboard and Mouse";
   info.synthetic = true;
+  info.kind = DeviceKind::kKeyboardMouse;
   out.push_back(info);
 }
 
