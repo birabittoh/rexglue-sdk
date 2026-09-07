@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 
 #include <rex/cvar.h>
 
@@ -113,16 +114,14 @@ void DrawFaceButton(ImDrawList* draw_list, const FaceStyle& style, float cx, flo
   }
 
   ImFont* font = ImGui::GetFont();
-  const float font_size = face_radius * 1.12f;
+  const float font_size = std::round(face_radius * 1.12f);
   const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, style.label);
-  const ImVec2 text_pos(center.x - text_size.x * 0.5f + face_radius * 0.02f,
-                        center.y - text_size.y * 0.5f);
-  draw_list->AddText(font, font_size, ImVec2(text_pos.x, text_pos.y + 1.5f),
+  const ImVec2 text_pos(std::round(center.x - text_size.x * 0.5f + face_radius * 0.02f),
+                        std::round(center.y - text_size.y * 0.5f));
+  draw_list->AddText(font, font_size, ImVec2(text_pos.x, text_pos.y + 1.0f),
                      ColorWithAlpha(black, alpha * 0.42f), style.label);
   const ImU32 label_color = ColorWithAlpha(white, std::min(alpha * 2.1f, 1.0f));
   draw_list->AddText(font, font_size, text_pos, label_color, style.label);
-  draw_list->AddText(font, font_size, ImVec2(text_pos.x + 0.7f, text_pos.y), label_color,
-                     style.label);
 }
 
 // One arrowhead of a D-pad, pointing away from the centre along (dx, dy).
@@ -142,11 +141,22 @@ void DrawDpadArrow(ImDrawList* draw_list, float cx, float cy, float radius, floa
 
 }  // namespace
 
-TouchControlsOverlay::TouchControlsOverlay(rex::ui::ImGuiDrawer* drawer, TouchInputDriver* driver)
-    : rex::ui::ImGuiDialog(drawer), driver_(driver) {}
+TouchControlsOverlay::TouchControlsOverlay(rex::ui::ImGuiDrawer* drawer, TouchInputDriver* driver,
+                                           InputSystem* input_system)
+    : rex::ui::ImGuiDialog(drawer), driver_(driver), input_system_(input_system) {}
 
 void TouchControlsOverlay::OnDraw(ImGuiIO& io) {
-  if (!driver_) {
+  if (!driver_ || !input_system_) {
+    return;
+  }
+  bool assigned = false;
+  for (const auto& view : input_system_->SnapshotDevices()) {
+    if (view.device.kind == DeviceKind::kTouch && view.guest_user_mask != 0) {
+      assigned = true;
+      break;
+    }
+  }
+  if (!assigned) {
     return;
   }
   TouchVisualState state;

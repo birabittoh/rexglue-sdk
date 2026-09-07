@@ -11,6 +11,7 @@
 #pragma once
 
 #include <rex/input/touch/touch_input_driver.h>
+#include <rex/input/input_system.h>
 #include <rex/ui/imgui_dialog.h>
 
 namespace rex::input::touch {
@@ -24,13 +25,15 @@ namespace rex::input::touch {
  */
 class TouchControlsOverlay final : public rex::ui::ImGuiDialog {
  public:
-  TouchControlsOverlay(rex::ui::ImGuiDrawer* drawer, TouchInputDriver* driver);
+  TouchControlsOverlay(rex::ui::ImGuiDrawer* drawer, TouchInputDriver* driver,
+                       InputSystem* input_system);
 
  protected:
   void OnDraw(ImGuiIO& io) override;
 
  private:
   TouchInputDriver* driver_ = nullptr;
+  InputSystem* input_system_ = nullptr;
 };
 
 }  // namespace rex::input::touch

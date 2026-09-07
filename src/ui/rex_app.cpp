@@ -407,7 +407,7 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
     if (imgui_drawer_) {
       if (auto* touch_driver = input_sys->GetDriver<rex::input::touch::TouchInputDriver>()) {
         touch_controls_overlay_ = std::make_unique<rex::input::touch::TouchControlsOverlay>(
-            imgui_drawer_.get(), touch_driver);
+            imgui_drawer_.get(), touch_driver, input_sys);
       }
     }
   }
