@@ -363,6 +363,15 @@ std::string ModState::HostPlatformId() {
 #else
   return "mac-x64";
 #endif
+#elif defined(__ANDROID__)
+  // Also checked ahead of the architecture branches: Android is aarch64 too,
+  // so without this it reported "linux-arm64" and the auto-updater happily
+  // matched (and downloaded) the Linux release asset.
+#if defined(__aarch64__) || defined(_M_ARM64)
+  return "android-arm64";
+#else
+  return "android-x64";
+#endif
 #elif defined(__aarch64__) || defined(_M_ARM64)
   return "linux-arm64";
 #else

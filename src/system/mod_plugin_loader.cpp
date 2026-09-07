@@ -41,7 +41,8 @@ std::string ModFileName(std::string_view stem, std::string_view postfix) {
 #endif
 }
 
-// Matches the "windows-x64" / "linux-x64" / "linux-arm64" / "mac-arm64" keys mod-build
+// Matches the "windows-x64" / "linux-x64" / "linux-arm64" / "mac-arm64" /
+// "android-arm64" keys mod-build
 // tooling (e.g. NocturneRecomp-Mods' scripts/make_mods.py) already writes
 // into a mod's `platform` manifest field, so a mod distribution zip can ship
 // one `code/<platform>/` subdirectory per platform side by side, needed in
@@ -55,6 +56,17 @@ constexpr std::string_view ModPlatformDir() {
   return "mac-arm64";
 #elif defined(REX_ARCH_AMD64)
   return "mac-x64";
+#else
+  return "";
+#endif
+#elif REX_PLATFORM_ANDROID
+  // Ahead of REX_PLATFORM_LINUX, which Android also sets: bionic and glibc
+  // arm64 shared objects are not interchangeable, so they need separate
+  // directories. Keep in step with ModState::HostPlatformId().
+#if defined(REX_ARCH_ARM64)
+  return "android-arm64";
+#elif defined(REX_ARCH_AMD64)
+  return "android-x64";
 #else
   return "";
 #endif

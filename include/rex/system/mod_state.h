@@ -161,7 +161,8 @@ class ModState {
                                         std::string_view host_platform);
 
   // This process's platform id in the "platform" mod.toml key convention
-  // (e.g. "windows-x64", "linux-x64", "linux-arm64", "mac-arm64").
+  // (e.g. "windows-x64", "linux-x64", "linux-arm64", "mac-arm64",
+  // "android-arm64").
   static std::string HostPlatformId();
 
   // Sideloads a local mod archive (.zip) dropped onto the game window:

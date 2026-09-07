@@ -62,11 +62,18 @@ class AutoUpdater {
  public:
   ~AutoUpdater();
 
+  // False on platforms where no ApplyAndRestart is built (Android, whose
+  // install is a signed APK the OS owns; updates go through the store), so a
+  // staged update could never be applied. Callers should skip the whole
+  // update UI when this is false; CheckAsync/InstallAsync also refuse.
+  static bool SupportsSelfUpdate();
+
   // Kicks off a background check against RuntimeConfig::update_repo's
   // latest GitHub release; a no-op (state left as-is) if one is already in
   // flight. Settles straight to kFailed, no request attempted, if
-  // auto_update_enabled is false, update_repo/update_asset_format are
-  // unset, or Runtime::game_version() is empty (nothing to compare against).
+  // SupportsSelfUpdate() is false, auto_update_enabled is false,
+  // update_repo/update_asset_format are unset, or Runtime::game_version() is
+  // empty (nothing to compare against).
   void CheckAsync();
 
   UpdateCheckState state() const { return state_.load(std::memory_order_acquire); }
@@ -77,7 +84,7 @@ class AutoUpdater {
 
   // Downloads `info`'s asset, verifies its sha256, extracts it, and stages
   // it under StagingRoot(install_root) for ApplyAndRestart() to pick up. A
-  // no-op if an install is already in flight.
+  // no-op if an install is already in flight or SupportsSelfUpdate() is false.
   void InstallAsync(const UpdateInfo& info, const std::filesystem::path& install_root);
 
   UpdateInstallResult InstallSnapshot() const;

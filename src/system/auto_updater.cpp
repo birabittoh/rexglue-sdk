@@ -25,6 +25,7 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/net/http.h>
+#include <rex/platform.h>
 #include <rex/runtime.h>
 #include <rex/system/mod_state.h>
 #include <rex/system/mod_version.h>
@@ -97,6 +98,12 @@ void MergeShippedToml(const std::filesystem::path& install_root,
 
 }  // namespace
 
+bool AutoUpdater::SupportsSelfUpdate() {
+  // Kept in lockstep with src/system/CMakeLists.txt, which only builds an
+  // ApplyAndRestart for these platforms.
+  return REX_PLATFORM_WIN32 || REX_PLATFORM_MAC || REX_PLATFORM_GNU_LINUX;
+}
+
 std::string AutoUpdater::ExpandAssetFormat(const std::string& format, const std::string& tag) {
   std::string result = ReplaceAll(format, "{tag}", tag);
   result = ReplaceAll(result, "{platform}", ModState::HostPlatformId());
@@ -127,7 +134,8 @@ void AutoUpdater::CheckAsync() {
   std::string format = runtime ? runtime->update_asset_format() : std::string();
   std::string current_version = runtime ? runtime->game_version() : std::string();
 
-  if (!enabled || repo.empty() || format.empty() || current_version.empty()) {
+  if (!SupportsSelfUpdate() || !enabled || repo.empty() || format.empty() ||
+      current_version.empty()) {
     // Disabled by config, or nothing to compare a fetched tag against:
     // settle straight to kFailed without a request, same convention as
     // ModCatalog::Refresh().
@@ -235,6 +243,9 @@ bool AutoUpdater::HasPendingSelfUpdate(const std::filesystem::path& install_root
 // under it (see the file-level @remarks above).
 
 void AutoUpdater::InstallAsync(const UpdateInfo& info, const std::filesystem::path& install_root) {
+  if (!SupportsSelfUpdate()) {
+    return;  // nothing could ever apply what this would stage.
+  }
   bool expected = false;
   if (!install_in_flight_.compare_exchange_strong(expected, true)) {
     return;
