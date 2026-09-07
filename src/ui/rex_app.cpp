@@ -583,6 +583,8 @@ bool ReXApp::SetupPresentation() {
   // consumed before they reach the game as raw key input.
   window_->AddInputListener(this, 1);
 
+  window_->SetCursorVisibility(ui::Window::CursorVisibility::kAutoHidden);
+
   if (REXCVAR_GET(fullscreen)) {
     window_->SetFullscreen(true);
   }

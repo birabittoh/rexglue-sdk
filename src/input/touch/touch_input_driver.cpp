@@ -34,6 +34,7 @@ namespace rex::input::touch {
 namespace {
 
 constexpr rex::input::DeviceId kTouchDevice = static_cast<rex::input::DeviceId>(0x544F5543);
+constexpr auto kTouchAutoHideDelay = std::chrono::milliseconds(3333);
 
 // Deflection at which a stick reports full range, as a fraction of the travel
 // from its centre to the edge of the ring. Short of 1.0 so the last sliver of
@@ -189,6 +190,7 @@ void TouchInputDriver::SetLayoutProvider(TouchLayoutProvider provider) {
   surface_width_ = 0.0f;
   surface_height_ = 0.0f;
   layout_ = TouchLayout();
+  last_touch_time_ = std::chrono::steady_clock::now();
   ReleaseAll();
 }
 
@@ -256,6 +258,7 @@ void TouchInputDriver::OnTouchEvent(rex::ui::TouchEvent& e) {
   }
 
   std::lock_guard<std::mutex> lock(state_mutex_);
+  last_touch_time_ = std::chrono::steady_clock::now();
   if (!layout_provider_) {
     return;
   }
@@ -366,6 +369,10 @@ bool TouchInputDriver::GetVisualState(TouchVisualState* out_state) {
     // when it closed has no way to report its release. Drop them here, on the
     // frame that notices, rather than leaving a stick drawn.
     ReleaseAll();
+    return false;
+  }
+  if (finger_targets_.empty() &&
+      std::chrono::steady_clock::now() - last_touch_time_ >= kTouchAutoHideDelay) {
     return false;
   }
   out_state->pressed_mask = pressed_mask_;

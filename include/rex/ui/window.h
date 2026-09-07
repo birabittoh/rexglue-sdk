@@ -350,10 +350,7 @@ class Window {
   // Desired state stored by the common Window, externally modifiable, read-only
   // in the implementation.
   CursorVisibility GetCursorVisibility() const { return cursor_visibility_; }
-  // Setting this to kAutoHidden from any _other_ visibility should hide the
-  // cursor immediately - for instance, if the external code wants to auto-hide
-  // the cursor in fullscreen, to allow going into the fullscreen mode to hide
-  // the cursor instantly.
+  // kAutoHidden shows the cursor until the configured idle delay expires.
   void SetCursorVisibility(CursorVisibility new_cursor_visibility);
 
   uint32_t GetCursorAutoHideDelayMs() const { return cursor_auto_hide_delay_ms_; }

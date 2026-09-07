@@ -483,10 +483,8 @@ void WindowSDL::ApplyCursorVisibilityNow() {
       SDL_HideCursor();
       break;
     case CursorVisibility::kAutoHidden:
-      // Hide immediately (see the contract in window.h: switching to
-      // kAutoHidden hides instantly, e.g. when entering fullscreen); the
-      // mouse-motion handler reveals the cursor and re-arms the timer.
-      SDL_HideCursor();
+      SDL_ShowCursor();
+      RearmCursorAutoHideTimer();
       break;
   }
 }

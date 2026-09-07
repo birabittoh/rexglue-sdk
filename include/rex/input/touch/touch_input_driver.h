@@ -15,6 +15,7 @@
 #include <rex/ui/window.h>
 #include <rex/ui/window_listener.h>
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -242,6 +243,7 @@ class TouchInputDriver final : public InputDriver, public rex::ui::WindowInputLi
   std::vector<StickState> stick_states_;
 
   uint32_t packet_number_ = 0;
+  std::chrono::steady_clock::time_point last_touch_time_ = std::chrono::steady_clock::now();
 };
 
 }  // namespace rex::input::touch
