@@ -14,6 +14,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cfloat>
 
 #include <rex/cvar.h>
 
@@ -25,6 +26,40 @@ namespace {
 
 // Held controls brighten
 constexpr float kPressedBoost = 2.0f;
+
+struct FaceStyle {
+  ImVec4 color;
+  const char* label;
+};
+
+bool GetFaceStyle(uint16_t button, FaceStyle* style) {
+  switch (button) {
+    case X_INPUT_GAMEPAD_A:
+      *style = {{0.369f, 0.682f, 0.227f, 1.0f}, "A"};
+      return true;
+    case X_INPUT_GAMEPAD_B:
+      *style = {{0.761f, 0.231f, 0.231f, 1.0f}, "B"};
+      return true;
+    case X_INPUT_GAMEPAD_X:
+      *style = {{0.243f, 0.471f, 0.761f, 1.0f}, "X"};
+      return true;
+    case X_INPUT_GAMEPAD_Y:
+      *style = {{0.847f, 0.635f, 0.118f, 1.0f}, "Y"};
+      return true;
+    default:
+      return false;
+  }
+}
+
+ImVec4 LerpColor(const ImVec4& a, const ImVec4& b, float t) {
+  return {a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t,
+          a.w + (b.w - a.w) * t};
+}
+
+ImU32 ColorWithAlpha(ImVec4 color, float alpha) {
+  color.w = std::clamp(alpha, 0.0f, 1.0f);
+  return ImGui::GetColorU32(color);
+}
 
 ImU32 FillColor(float alpha, bool pressed) {
   const float a = std::min(alpha * (pressed ? kPressedBoost : 1.0f), 1.0f);
@@ -45,6 +80,49 @@ void DrawLabel(ImDrawList* draw_list, const char* label, float cx, float cy, flo
   const float a = std::min(alpha * (pressed ? kPressedBoost : 1.0f) * 1.8f, 1.0f);
   draw_list->AddText(ImVec2(cx - size.x * 0.5f, cy - size.y * 0.5f),
                      ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, a)), label);
+}
+
+void DrawFaceButton(ImDrawList* draw_list, const FaceStyle& style, float cx, float cy, float radius,
+                    float alpha, bool pressed) {
+  const ImVec4 white(1.0f, 1.0f, 1.0f, 1.0f);
+  const ImVec4 black(0.0f, 0.0f, 0.0f, 1.0f);
+  const ImVec4 highlight = LerpColor(style.color, white, 0.35f);
+  const ImVec4 shadow = LerpColor(style.color, black, 0.28f);
+  const float face_alpha = std::min(alpha * (pressed ? 2.0f : 1.5f), 1.0f);
+  const float face_radius = radius * (pressed ? 0.96f : 1.0f);
+  const ImVec2 center(cx, cy + (pressed ? radius * 0.025f : 0.0f));
+
+  draw_list->AddCircleFilled(center, face_radius, ColorWithAlpha(shadow, face_alpha), 48);
+  constexpr int kGradientSteps = 14;
+  for (int step = kGradientSteps - 1; step >= 1; --step) {
+    const float fraction = float(step) / float(kGradientSteps);
+    const float shade = 1.0f - fraction;
+    const ImVec2 layer_center(center.x, center.y - face_radius * 0.30f * shade);
+    draw_list->AddCircleFilled(layer_center, face_radius * fraction,
+                               ColorWithAlpha(LerpColor(shadow, highlight, shade), face_alpha), 48);
+  }
+
+  const float gloss_alpha = alpha * (pressed ? 0.22f : 0.48f);
+  draw_list->AddEllipseFilled(ImVec2(center.x, center.y - face_radius * 0.38f),
+                              ImVec2(face_radius * 0.56f, face_radius * 0.23f),
+                              ColorWithAlpha(white, gloss_alpha), 0.0f, 32);
+  draw_list->AddCircle(center, face_radius, ColorWithAlpha(white, alpha * 0.62f), 48, 2.0f);
+  if (pressed) {
+    draw_list->AddCircle(center, face_radius + 2.0f, ColorWithAlpha(white, alpha * 0.85f), 48,
+                         2.0f);
+  }
+
+  ImFont* font = ImGui::GetFont();
+  const float font_size = face_radius * 1.12f;
+  const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, style.label);
+  const ImVec2 text_pos(center.x - text_size.x * 0.5f + face_radius * 0.02f,
+                        center.y - text_size.y * 0.5f);
+  draw_list->AddText(font, font_size, ImVec2(text_pos.x, text_pos.y + 1.5f),
+                     ColorWithAlpha(black, alpha * 0.42f), style.label);
+  const ImU32 label_color = ColorWithAlpha(white, std::min(alpha * 2.1f, 1.0f));
+  draw_list->AddText(font, font_size, text_pos, label_color, style.label);
+  draw_list->AddText(font, font_size, ImVec2(text_pos.x + 0.7f, text_pos.y), label_color,
+                     style.label);
 }
 
 // One arrowhead of a D-pad, pointing away from the centre along (dx, dy).
@@ -103,11 +181,19 @@ void TouchControlsOverlay::OnDraw(ImGuiIO& io) {
     const uint16_t held = i < state.control_buttons.size() ? state.control_buttons[i] : 0;
 
     switch (c.shape) {
-      case TouchControl::Shape::kCircle:
-        draw_list->AddCircleFilled(ImVec2(c.cx, c.cy), c.half_width, FillColor(alpha, pressed), 32);
-        draw_list->AddCircle(ImVec2(c.cx, c.cy), c.half_width, EdgeColor(alpha, pressed), 32, 2.0f);
-        DrawLabel(draw_list, c.label.c_str(), c.cx, c.cy, alpha, pressed);
+      case TouchControl::Shape::kCircle: {
+        FaceStyle face_style;
+        if (GetFaceStyle(c.button, &face_style)) {
+          DrawFaceButton(draw_list, face_style, c.cx, c.cy, c.half_width, alpha, pressed);
+        } else {
+          draw_list->AddCircleFilled(ImVec2(c.cx, c.cy), c.half_width, FillColor(alpha, pressed),
+                                     32);
+          draw_list->AddCircle(ImVec2(c.cx, c.cy), c.half_width, EdgeColor(alpha, pressed), 32,
+                               2.0f);
+          DrawLabel(draw_list, c.label.c_str(), c.cx, c.cy, alpha, pressed);
+        }
         break;
+      }
 
       case TouchControl::Shape::kPill: {
         const ImVec2 lo(c.cx - c.half_width, c.cy - c.half_height);
