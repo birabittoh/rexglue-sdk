@@ -53,6 +53,8 @@ class XmaDecoder {
   void Pause();
   void Resume();
 
+  void SetPcmReplacementProvider(XmaPcmReplacementProvider provider, void* user);
+
  protected:
   int GetContextId(uint32_t guest_ptr);
 

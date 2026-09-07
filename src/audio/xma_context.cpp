@@ -209,6 +209,47 @@ void XmaContext::ResetDecoderState() {
   current_frame_remaining_subframes_ = 0;
   loop_frame_output_limit_ = 0;
   loop_start_skip_pending_ = false;
+  pcm_replacement_tag_.fill(0);
+  pcm_replacement_cursor_ = 0;
+  pcm_replacement_active_ = false;
+}
+
+bool XmaContext::DecodePcmReplacement(XMA_CONTEXT_DATA* data) {
+  if (!pcm_replacement_provider_) {
+    return false;
+  }
+
+  if (!pcm_replacement_active_) {
+    const uint8_t* input = GetCurrentInputBuffer(data);
+    if (!input || std::memcmp(input, "RXPcmSub", 8) != 0) {
+      return false;
+    }
+    std::memcpy(pcm_replacement_tag_.data(), input, pcm_replacement_tag_.size());
+    pcm_replacement_cursor_ = 0;
+    pcm_replacement_active_ = true;
+  }
+
+  bool finished = false;
+  raw_frame_.fill(0);
+  if (!pcm_replacement_provider_(
+          pcm_replacement_user_, pcm_replacement_tag_.data(), &pcm_replacement_cursor_,
+          GetSampleRate(data->sample_rate), data->is_stereo ? 2u : 1u,
+          reinterpret_cast<int16_t*>(raw_frame_.data()), kSamplesPerFrame, &finished)) {
+    pcm_replacement_active_ = false;
+    return false;
+  }
+  for (size_t i = 0; i < kSamplesPerFrame * (data->is_stereo ? 2u : 1u); ++i) {
+    auto* sample = raw_frame_.data() + i * 2;
+    std::swap(sample[0], sample[1]);
+  }
+
+  current_frame_remaining_subframes_ = 4 << data->is_stereo;
+  loop_frame_output_limit_ = 0;
+  if (finished) {
+    data->input_buffer_0_valid = 0;
+    data->input_buffer_1_valid = 0;
+  }
+  return true;
 }
 
 void XmaContext::Disable() {
@@ -541,6 +582,10 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
     if (!data->IsCurrentInputBufferValid()) {
       return;
     }
+  }
+
+  if (DecodePcmReplacement(data)) {
+    return;
   }
 
   uint8_t* current_input_buffer = GetCurrentInputBuffer(data);

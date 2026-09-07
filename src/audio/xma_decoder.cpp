@@ -59,6 +59,12 @@ XmaDecoder::XmaDecoder(runtime::FunctionDispatcher* function_dispatcher)
 
 XmaDecoder::~XmaDecoder() = default;
 
+void XmaDecoder::SetPcmReplacementProvider(XmaPcmReplacementProvider provider, void* user) {
+  for (auto& context : contexts_) {
+    context.SetPcmReplacementProvider(provider, user);
+  }
+}
+
 void av_log_callback(void* avcl, int level, const char* fmt, va_list va) {
   if (!REXCVAR_GET(ffmpeg_verbose) && level > AV_LOG_WARNING) {
     return;

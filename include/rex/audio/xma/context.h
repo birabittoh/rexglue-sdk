@@ -38,6 +38,10 @@ struct AVPacket;
 
 namespace rex::audio {
 
+using XmaPcmReplacementProvider = bool (*)(void* user, const uint8_t tag[16], uint64_t* cursor,
+                                           int sample_rate, uint32_t channels, int16_t* samples,
+                                           uint32_t frame_count, bool* finished);
+
 // This is stored in guest space in big-endian order.
 // We load and swap the whole thing to splat here so that we can
 // use bitfields.
@@ -236,6 +240,11 @@ class XmaContext {
     }
   }
 
+  void SetPcmReplacementProvider(XmaPcmReplacementProvider provider, void* user) {
+    pcm_replacement_provider_ = provider;
+    pcm_replacement_user_ = user;
+  }
+
  private:
   static void SwapInputBuffer(XMA_CONTEXT_DATA* data);
   static int GetSampleRate(int id);
@@ -255,6 +264,7 @@ class XmaContext {
   void UpdateLoopStatus(XMA_CONTEXT_DATA* data);
   void ClearLocked(XMA_CONTEXT_DATA* data);
   void ResetDecoderState();
+  bool DecodePcmReplacement(XMA_CONTEXT_DATA* data);
 
   memory::RingBuffer PrepareOutputRingBuffer(XMA_CONTEXT_DATA* data);
   int PrepareDecoder(int sample_rate, bool is_two_channel);
@@ -299,6 +309,12 @@ class XmaContext {
   // Loop subframe precision state
   uint8_t loop_frame_output_limit_ = 0;
   bool loop_start_skip_pending_ = false;
+
+  XmaPcmReplacementProvider pcm_replacement_provider_ = nullptr;
+  void* pcm_replacement_user_ = nullptr;
+  std::array<uint8_t, 16> pcm_replacement_tag_{};
+  uint64_t pcm_replacement_cursor_ = 0;
+  bool pcm_replacement_active_ = false;
 
   // Start-padding realignment state. Attributes belong to the frame whose
   // samples are still being assembled, so they land one decode after the frame
