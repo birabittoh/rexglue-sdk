@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstring>
 
 #include <rex/cvar.h>
 
@@ -72,6 +73,15 @@ ImU32 EdgeColor(float alpha, bool pressed) {
   return ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, a));
 }
 
+ImFont* FaceButtonFont() {
+  for (ImFont* font : ImGui::GetIO().Fonts->Fonts) {
+    if (std::strcmp(font->GetDebugName(), "Touch controls") == 0) {
+      return font;
+    }
+  }
+  return ImGui::GetFont();
+}
+
 void DrawLabel(ImDrawList* draw_list, const char* label, float cx, float cy, float alpha,
                bool pressed) {
   if (!label || !*label) {
@@ -113,8 +123,8 @@ void DrawFaceButton(ImDrawList* draw_list, const FaceStyle& style, float cx, flo
                          2.0f);
   }
 
-  ImFont* font = ImGui::GetFont();
-  const float font_size = std::round(face_radius * 1.12f);
+  ImFont* font = FaceButtonFont();
+  const float font_size = std::min(std::round(face_radius * 1.12f), font->LegacySize);
   const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, style.label);
   const ImVec2 text_pos(std::round(center.x - text_size.x * 0.5f + face_radius * 0.02f),
                         std::round(center.y - text_size.y * 0.5f));
