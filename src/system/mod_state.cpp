@@ -23,7 +23,9 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/platform/process.h>
-#include <rex/runtime.h>  // REXCVAR_DECLARE(mods_data_root)
+#include <rex/platform.h>
+#include <rex/runtime.h>              // REXCVAR_DECLARE(mods_data_root)
+#include <rex/system/auto_updater.h>  // AutoUpdater::EnclosingAppBundle
 #include <rex/system/mod_version.h>
 
 namespace rex::system {
@@ -82,10 +84,23 @@ bool HasZipExtension(const std::filesystem::path& path) {
 
 std::filesystem::path ModState::ResolveModsRoot() {
   std::string mods_root_cvar = REXCVAR_GET(mods_data_root);
-  if (mods_root_cvar.empty()) {
-    return rex::filesystem::GetExecutableFolder() / "mods";
+  if (!mods_root_cvar.empty()) {
+    return std::filesystem::absolute(std::filesystem::path(mods_root_cvar));
   }
-  return std::filesystem::absolute(std::filesystem::path(mods_root_cvar));
+#if REX_PLATFORM_MAC
+  // Inside an .app the executable folder is Contents/MacOS, which is the
+  // wrong place for mods twice over: installing one writes into the bundle
+  // and breaks the signature, and a self update swaps the bundle whole (see
+  // auto_updater_mac.cpp), taking every installed mod with it. The user data
+  // root survives both.
+  if (!AutoUpdater::EnclosingAppBundle(rex::filesystem::GetExecutablePath()).empty()) {
+    auto* runtime = rex::Runtime::instance();
+    if (runtime && !runtime->user_data_root().empty()) {
+      return runtime->user_data_root() / "mods";
+    }
+  }
+#endif
+  return rex::filesystem::GetExecutableFolder() / "mods";
 }
 
 std::vector<ModStateEntry> ModState::Load(const std::filesystem::path& root) {

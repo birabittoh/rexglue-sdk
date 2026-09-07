@@ -404,14 +404,10 @@ void Runtime::ResolveEnabledMods() {
   enabled_mods_info_.clear();
   mod_state_at_startup_.clear();
 
-  std::string mods_root_cvar = REXCVAR_GET(mods_data_root);
-  // Default to <exe folder>/mods when unset, so a packaged build with mods
-  // enabled in its config works without a launcher passing --mods_data_root
-  // explicitly (relative values are otherwise resolved against CWD, not the
-  // exe directory).
-  auto mods_root = mods_root_cvar.empty()
-                       ? rex::filesystem::GetExecutableFolder() / "mods"
-                       : std::filesystem::absolute(std::filesystem::path(mods_root_cvar));
+  // Shared with the mod manager overlay, so both agree on where mods live
+  // when the mods_data_root cvar is unset (relative values are otherwise
+  // resolved against CWD, not the exe directory).
+  auto mods_root = system::ModState::ResolveModsRoot();
   if (!std::filesystem::is_directory(mods_root)) {
     // No mods.toml possible either; fall back straight to the enabled_mods
     // cvar below (empty mods_root means "nothing installed").
