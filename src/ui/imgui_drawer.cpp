@@ -23,6 +23,7 @@
 #include <rex/ui/window.h>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 namespace rex {
 namespace ui {
@@ -35,6 +36,13 @@ const char kProggyTinyCompressedDataBase85[10950 + 1] =
 static_assert(sizeof(ImmediateVertex) == sizeof(ImDrawVert), "Vertex types must match");
 
 namespace {
+
+bool WantsPointerAt(const ImVec2& position) {
+  ImGuiWindow* hovered_window = nullptr;
+  ImGuiWindow* hovered_window_under_moving_window = nullptr;
+  ImGui::FindHoveredWindowEx(position, false, &hovered_window, &hovered_window_under_moving_window);
+  return ImGui::GetIO().WantCaptureMouse || hovered_window != nullptr;
+}
 
 void ApplyDefaultStyle(ImGuiStyle& style) {
   style.ScrollbarRounding = 0;
@@ -549,6 +557,7 @@ void ImGuiDrawer::OnKeyChar(KeyEvent& e) {
 void ImGuiDrawer::OnMouseDown(MouseEvent& e) {
   SwitchToPhysicalMouseAndUpdateMousePosition(e);
   auto& io = GetIO();
+  const bool wants_pointer = WantsPointerAt(io.MousePos);
   int button = -1;
   switch (e.button()) {
     case rex::ui::MouseEvent::Button::kLeft: {
@@ -571,6 +580,9 @@ void ImGuiDrawer::OnMouseDown(MouseEvent& e) {
       }
       io.MouseDown[button] = true;
     }
+  }
+  if (wants_pointer) {
+    e.set_handled(true);
   }
 }
 
@@ -632,6 +644,7 @@ void ImGuiDrawer::OnTouchEvent(TouchEvent& e) {
     }
   }
   UpdateMousePosition(e.x(), e.y());
+  const bool wants_pointer = WantsPointerAt(io.MousePos);
   if (action == TouchEvent::Action::kUp || action == TouchEvent::Action::kCancel) {
     io.MouseDown[0] = false;
     touch_pointer_id_ = TouchEvent::kPointerIDNone;
@@ -641,6 +654,9 @@ void ImGuiDrawer::OnTouchEvent(TouchEvent& e) {
   } else {
     io.MouseDown[0] = true;
     reset_mouse_position_after_next_frame_ = false;
+  }
+  if (wants_pointer) {
+    e.set_handled(true);
   }
 }
 
