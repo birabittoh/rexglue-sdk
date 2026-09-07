@@ -314,6 +314,10 @@ enum class VirtualKey : uint16_t {
   kPa1 = 0xFD,
   kOemClear = 0xFE,
 
+  // Synthetic mouse wheel directions used by configurable input bindings.
+  kMouseWheelUp = 0x100,
+  kMouseWheelDown = 0x101,
+
   // VK_PAD_* from XInput.h for XInputGetKeystroke. kXInput prefix added to
   // distinguish from VK_GAMEPAD_*, added much later for the Xbox One
   // controller.

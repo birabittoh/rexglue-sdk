@@ -78,7 +78,7 @@ constexpr uint8_t kModShift = 1u << 0;
 constexpr uint8_t kModCtrl = 1u << 1;
 constexpr uint8_t kModAlt = 1u << 2;
 
-uint8_t LiveModifiers(const bool (&key_down)[256]) {
+uint8_t LiveModifiers(const bool (&key_down)[258]) {
   uint8_t mods = 0;
   if (key_down[static_cast<uint16_t>(rex::ui::VirtualKey::kShift)])
     mods |= kModShift;
@@ -125,7 +125,7 @@ std::string_view TrimSpaces(std::string_view s) {
   return s;
 }
 
-bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t live_mods) {
+bool TokenPressed(const bool (&key_down)[258], std::string_view token, uint8_t live_mods) {
   uint8_t want = TakeModifiers(token);
   if (want != live_mods) {
     return false;
@@ -135,7 +135,7 @@ bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t l
     return false;
   }
   uint16_t idx = static_cast<uint16_t>(vk);
-  return idx < 256 && key_down[idx];
+  return idx < 258 && key_down[idx];
 }
 
 std::atomic<bool> mouse_look_active{true};
@@ -203,7 +203,7 @@ bool MnkInputDriver::IsEnabled() const {
   return REXCVAR_GET(mnk_mode);
 }
 
-static bool IsBindPressed(const bool (&key_down)[256], const std::string& cvar_val) {
+static bool IsBindPressed(const bool (&key_down)[258], const std::string& cvar_val) {
   const uint8_t live_mods = LiveModifiers(key_down);
   std::string_view rest(cvar_val);
   while (!rest.empty()) {
@@ -277,6 +277,10 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
   }
 
   std::lock_guard lock(state_mutex_);
+
+  auto wheel_now = std::chrono::steady_clock::now();
+  key_down_[static_cast<uint16_t>(VirtualKey::kMouseWheelUp)] = wheel_now < wheel_up_until_;
+  key_down_[static_cast<uint16_t>(VirtualKey::kMouseWheelDown)] = wheel_now < wheel_down_until_;
 
   uint16_t buttons = 0;
   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_a)))
@@ -519,7 +523,7 @@ void MnkInputDriver::DecayMouseAccumulator() {
 }
 
 void MnkInputDriver::SetKeyState(uint16_t vk, bool down) {
-  if (vk < 256) {
+  if (vk < 258) {
     key_down_[vk] = down;
   }
 }
@@ -608,6 +612,19 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
   }
 }
 
+void MnkInputDriver::OnMouseWheel(rex::ui::MouseEvent& e) {
+  if (!IsEnabled() || !has_focus_)
+    return;
+  std::lock_guard lock(state_mutex_);
+  constexpr auto kWheelPulse = std::chrono::milliseconds(50);
+  auto until = std::chrono::steady_clock::now() + kWheelPulse;
+  if (e.scroll_y() > 0) {
+    wheel_up_until_ = until;
+  } else if (e.scroll_y() < 0) {
+    wheel_down_until_ = until;
+  }
+}
+
 bool MnkInputDriver::TryGetLookDelta(int32_t* out_dx, int32_t* out_dy) {
   if (!IsEnabled() || !has_focus_) {
     return false;
@@ -676,6 +693,8 @@ void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
   {
     std::lock_guard lock(state_mutex_);
     std::memset(key_down_, 0, sizeof(key_down_));
+    wheel_up_until_ = {};
+    wheel_down_until_ = {};
     mouse_dx_ = 0.0;
     mouse_dy_ = 0.0;
     raw_delta_x_ = 0.0;

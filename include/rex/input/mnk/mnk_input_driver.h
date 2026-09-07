@@ -53,6 +53,7 @@ class MnkInputDriver final : public InputDriver,
   void OnMouseDown(rex::ui::MouseEvent& e) override;
   void OnMouseUp(rex::ui::MouseEvent& e) override;
   void OnMouseMove(rex::ui::MouseEvent& e) override;
+  void OnMouseWheel(rex::ui::MouseEvent& e) override;
 
   // WindowListener
   void OnClosing(rex::ui::UIEvent& e) override;
@@ -105,7 +106,9 @@ class MnkInputDriver final : public InputDriver,
   rex::ui::Window* attached_window_ = nullptr;
 
   std::mutex state_mutex_;
-  bool key_down_[256] = {};
+  bool key_down_[258] = {};
+  std::chrono::steady_clock::time_point wheel_up_until_{};
+  std::chrono::steady_clock::time_point wheel_down_until_{};
 
   // Mouse delta tracking: an exponentially-decaying accumulator (not a
   // per-poll delta that gets hard-reset to zero) of motion while the mouse is
