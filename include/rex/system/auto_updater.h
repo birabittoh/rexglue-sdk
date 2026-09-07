@@ -36,6 +36,8 @@
 #include <string>
 #include <thread>
 
+#include <rex/platform.h>
+
 namespace rex::system {
 
 enum class UpdateCheckState { kIdle, kChecking, kUpToDate, kUpdateAvailable, kFailed };
@@ -88,6 +90,27 @@ class AutoUpdater {
   void InstallAsync(const UpdateInfo& info, const std::filesystem::path& install_root);
 
   UpdateInstallResult InstallSnapshot() const;
+
+  // The directory an update replaces entries in, which every other path here
+  // takes as `install_root`. GetExecutableFolder() everywhere except a macOS
+  // .app, where the executable sits three levels down in Contents/MacOS and
+  // it is the bundle's *parent* that owns the install (the bundle is swapped
+  // whole; see auto_updater_mac.cpp).
+  static std::filesystem::path InstallRoot();
+
+  // The .app containing `executable_path` (.../Foo.app/Contents/MacOS/foo),
+  // or an empty path if it is not laid out that way, which is also what every
+  // non-macOS build gets. Pure path inspection; nothing is stat'd.
+  static std::filesystem::path EnclosingAppBundle(const std::filesystem::path& executable_path);
+
+#if REX_PLATFORM_MAC
+  // Mounts `dmg` read-only, copies its real top-level entries into `dest_dir`
+  // with ditto (which keeps the code signature intact, unlike a plain
+  // recursive copy), and detaches. The drag-to-install "Applications" symlink
+  // and dot-files are skipped.
+  static bool ExtractDmg(const std::filesystem::path& dmg, const std::filesystem::path& dest_dir,
+                         std::string& error);
+#endif
 
   // Where a staged self-update's extracted content lives, as immediate
   // children mirroring the install root's own top-level layout (e.g.

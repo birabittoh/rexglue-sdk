@@ -96,7 +96,42 @@ void MergeShippedToml(const std::filesystem::path& install_root,
   }
 }
 
+// The release asset's extension per platform. macOS ships a .dmg rather than
+// a tarball because the .app has to carry a working code signature, and the
+// SDK's own tar reader drops symlinks and permission bits.
+std::string_view AssetExtension() {
+#if REX_PLATFORM_WIN32
+  return ".zip";
+#elif REX_PLATFORM_MAC
+  return ".dmg";
+#else
+  return ".tar.gz";
+#endif
+}
+
 }  // namespace
+
+std::filesystem::path AutoUpdater::EnclosingAppBundle(
+    const std::filesystem::path& executable_path) {
+  auto macos_dir = executable_path.parent_path();
+  if (macos_dir.filename() != "MacOS") {
+    return {};
+  }
+  auto contents_dir = macos_dir.parent_path();
+  if (contents_dir.filename() != "Contents") {
+    return {};
+  }
+  auto bundle = contents_dir.parent_path();
+  if (bundle.extension() != ".app") {
+    return {};
+  }
+  return bundle;
+}
+
+std::filesystem::path AutoUpdater::InstallRoot() {
+  auto bundle = EnclosingAppBundle(rex::filesystem::GetExecutablePath());
+  return bundle.empty() ? rex::filesystem::GetExecutableFolder() : bundle.parent_path();
+}
 
 bool AutoUpdater::SupportsSelfUpdate() {
   // Kept in lockstep with src/system/CMakeLists.txt, which only builds an
@@ -170,9 +205,7 @@ void AutoUpdater::CheckWorker(std::string repo, std::string format, std::string 
       return;
     }
 
-    std::string platform = ModState::HostPlatformId();
-    std::string ext = platform.rfind("windows", 0) == 0 ? ".zip" : ".tar.gz";
-    std::string expected_name = ExpandAssetFormat(format, tag) + ext;
+    std::string expected_name = ExpandAssetFormat(format, tag) + std::string(AssetExtension());
 
     UpdateInfo info;
     for (const auto& asset : parsed["assets"]) {
@@ -281,13 +314,17 @@ void AutoUpdater::InstallWorker(UpdateInfo info, std::filesystem::path install_r
     return;
   }
 
+  // Named off the asset's real suffix, which path::extension() cannot give for
+  // the ".tar.gz" double extension (it only strips ".gz").
+  auto ends_with = [&info](std::string_view suffix) {
+    return info.asset_name.size() > suffix.size() &&
+           info.asset_name.compare(info.asset_name.size() - suffix.size(), suffix.size(), suffix) ==
+               0;
+  };
+  bool is_tar_gz = ends_with(".tar.gz");
+  bool is_dmg = ends_with(".dmg");
   auto temp_archive =
-      temp_root / ("download" + std::filesystem::path(info.asset_name).extension().string());
-  // Handle the ".tar.gz" double extension: path::extension() above only
-  // strips ".gz", so re-derive the real suffix straight off the asset name.
-  bool is_tar_gz = info.asset_name.size() > 7 &&
-                   info.asset_name.compare(info.asset_name.size() - 7, 7, ".tar.gz") == 0;
-  temp_archive = temp_root / (is_tar_gz ? "download.tar.gz" : "download.zip");
+      temp_root / (is_tar_gz ? "download.tar.gz" : (is_dmg ? "download.dmg" : "download.zip"));
 
   std::string download_error;
   auto progress = [this](uint64_t downloaded, uint64_t total) {
@@ -322,9 +359,19 @@ void AutoUpdater::InstallWorker(UpdateInfo info, std::filesystem::path install_r
   auto extracted = temp_root / "extracted";
   std::filesystem::remove_all(extracted, ec);
   std::string extract_error;
-  bool extracted_ok = is_tar_gz
-                          ? rex::filesystem::ExtractTarGz(temp_archive, extracted, extract_error)
-                          : rex::filesystem::ExtractZip(temp_archive, extracted, extract_error);
+  bool extracted_ok;
+  if (is_dmg) {
+#if REX_PLATFORM_MAC
+    extracted_ok = ExtractDmg(temp_archive, extracted, extract_error);
+#else
+    extract_error = "disk images can only be opened on macOS";
+    extracted_ok = false;
+#endif
+  } else if (is_tar_gz) {
+    extracted_ok = rex::filesystem::ExtractTarGz(temp_archive, extracted, extract_error);
+  } else {
+    extracted_ok = rex::filesystem::ExtractZip(temp_archive, extracted, extract_error);
+  }
   if (!extracted_ok) {
     std::filesystem::remove_all(temp_root, ec);
     fail("extract failed: " + extract_error);
@@ -340,11 +387,19 @@ void AutoUpdater::InstallWorker(UpdateInfo info, std::filesystem::path install_r
     for (auto& e : std::filesystem::directory_iterator(extracted, ec)) {
       top_level.push_back(e);
     }
-    if (top_level.size() == 1 && top_level[0].is_directory()) {
+    // A lone .app is the payload itself, not a wrapper: unwrapping it would
+    // stage the bundle's Contents/ as if it were the install root.
+    if (top_level.size() == 1 && top_level[0].is_directory() &&
+        top_level[0].path().extension() != ".app") {
       content_root = top_level[0].path();
     }
   }
 
+  // A no-op for an .app payload, whose TOMLs live inside the bundle rather
+  // than at the install root, and deliberately so: rewriting anything under
+  // Contents/ would break the signature the whole-bundle swap exists to
+  // preserve. User settings are unaffected either way, since they are written
+  // to the user data root, not next to the executable.
   MergeShippedToml(install_root, content_root);
 
   auto staging = AutoUpdater::StagingRoot(install_root);

@@ -103,7 +103,8 @@ struct RuntimeConfig {
   // "{tag}" (the release's tag_name, e.g. "v1.4.0") and "{platform}" (this
   // host's platform id, e.g. "windows-x64"; see
   // system::ModState::HostPlatformId()). The extension (".zip" on Windows,
-  // ".tar.gz" elsewhere) is appended automatically. Empty disables
+  // ".dmg" on macOS, ".tar.gz" elsewhere) is appended automatically, so the
+  // published asset names have to match it. Empty disables
   // auto-update entirely, same as an empty `update_repo`. Example:
   // "nocturnerecomp-tu-{tag}-{platform}" matches the
   // "nocturnerecomp-tu-v1.4.0-windows-x64.zip" asset of a title-update build.

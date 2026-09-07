@@ -21,10 +21,12 @@
  */
 #include <rex/system/auto_updater.h>
 
+#include <cstdlib>
 #include <fstream>
 #include <string>
 #include <vector>
 
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <rex/logging.h>
@@ -33,23 +35,24 @@ namespace rex::system {
 
 namespace {
 
-// If `executable_path` is <something>.app/Contents/MacOS/<exe>, return the
-// .app; otherwise an empty path, meaning a plain unbundled binary, which is
-// what the mac-arm64 preset produces before packaging.
-std::filesystem::path EnclosingAppBundle(const std::filesystem::path& executable_path) {
-  auto macos_dir = executable_path.parent_path();
-  if (macos_dir.filename() != "MacOS") {
-    return {};
+// Wraps `text` for /bin/sh. Single quotes so nothing inside is expanded; an
+// embedded quote closes, escapes and reopens.
+std::string ShellQuote(const std::string& text) {
+  std::string quoted = "'";
+  for (char c : text) {
+    if (c == '\'') {
+      quoted += "'\\''";
+    } else {
+      quoted += c;
+    }
   }
-  auto contents_dir = macos_dir.parent_path();
-  if (contents_dir.filename() != "Contents") {
-    return {};
-  }
-  auto bundle = contents_dir.parent_path();
-  if (bundle.extension() != ".app") {
-    return {};
-  }
-  return bundle;
+  quoted += "'";
+  return quoted;
+}
+
+int RunShell(const std::string& command) {
+  int status = std::system(command.c_str());
+  return status == -1 ? -1 : WEXITSTATUS(status);
 }
 
 // Pick the staged entry that replaces `bundle`. Prefer an exact name match,
@@ -72,6 +75,57 @@ std::filesystem::path FindStagedBundle(const std::vector<std::filesystem::path>&
 }
 
 }  // namespace
+
+bool AutoUpdater::ExtractDmg(const std::filesystem::path& dmg,
+                             const std::filesystem::path& dest_dir, std::string& error) {
+  std::error_code ec;
+  std::filesystem::create_directories(dest_dir, ec);
+  if (ec) {
+    error = "failed to create destination directory: " + ec.message();
+    return false;
+  }
+  // An explicit mount point, so the image's own volume name never has to be
+  // read back out of hdiutil's output.
+  auto mount_point = dest_dir.parent_path() / "dmg-mount";
+  std::filesystem::remove_all(mount_point, ec);
+
+  std::string attach = "hdiutil attach -nobrowse -readonly -noverify -quiet -mountpoint " +
+                       ShellQuote(mount_point.string()) + " " + ShellQuote(dmg.string());
+  if (RunShell(attach) != 0) {
+    error = "failed to mount " + dmg.filename().string();
+    return false;
+  }
+
+  bool ok = true;
+  size_t copied = 0;
+  for (auto& entry : std::filesystem::directory_iterator(mount_point, ec)) {
+    auto name = entry.path().filename().string();
+    // The drag-to-install "Applications" link, and .background/.DS_Store,
+    // belong to the disk image's presentation, not to the install.
+    if (entry.is_symlink() || name.empty() || name[0] == '.') {
+      continue;
+    }
+    // ditto rather than a filesystem copy: it carries the extended attributes
+    // and permissions an .app's code signature is computed over.
+    std::string copy =
+        "ditto " + ShellQuote(entry.path().string()) + " " + ShellQuote((dest_dir / name).string());
+    if (RunShell(copy) != 0) {
+      error = "failed to copy " + name + " out of the disk image";
+      ok = false;
+      break;
+    }
+    ++copied;
+  }
+  if (ok && copied == 0) {
+    error = "disk image contains nothing to install";
+    ok = false;
+  }
+
+  RunShell("hdiutil detach -quiet " + ShellQuote(mount_point.string()) +
+           " || hdiutil detach -force -quiet " + ShellQuote(mount_point.string()));
+  std::filesystem::remove_all(mount_point, ec);
+  return ok;
+}
 
 bool AutoUpdater::ApplyAndRestart(const std::filesystem::path& install_root,
                                   const std::filesystem::path& executable_path) {
