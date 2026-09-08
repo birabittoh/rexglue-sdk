@@ -208,20 +208,24 @@ void GamepadUiController::PollUiNavigation(ImGuiIO& io) {
   }
   guide_was_down_ = guide_down;
 
-  // D-pad + left stick -> ImGui's built-in gamepad nav moves the cursor
-  // inside the active overlay.
-  io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, (buttons & rex::input::X_INPUT_GAMEPAD_DPAD_LEFT) != 0);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadRight,
-                 (buttons & rex::input::X_INPUT_GAMEPAD_DPAD_RIGHT) != 0);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadUp, (buttons & rex::input::X_INPUT_GAMEPAD_DPAD_UP) != 0);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadDown, (buttons & rex::input::X_INPUT_GAMEPAD_DPAD_DOWN) != 0);
-
+  // D-pad + left stick both drive ImGui's item-to-item nav. The stick's
+  // deflection is folded into the same dpad keys (past a threshold) rather
+  // than the LStick keys, which ImGui only uses for scrolling/tweaking, so
+  // the stick moves the cursor exactly like the dpad (key-repeat included).
   const float lx = NormalizeAxis(state.gamepad.thumb_lx);
   const float ly = NormalizeAxis(state.gamepad.thumb_ly);
-  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, lx < 0.0f, lx < 0.0f ? -lx : 0.0f);
-  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, lx > 0.0f, lx > 0.0f ? lx : 0.0f);
-  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, ly > 0.0f, ly > 0.0f ? ly : 0.0f);
-  io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, ly < 0.0f, ly < 0.0f ? -ly : 0.0f);
+  constexpr float kNavStickThreshold = 0.5f;
+  const bool left =
+      (buttons & rex::input::X_INPUT_GAMEPAD_DPAD_LEFT) != 0 || lx < -kNavStickThreshold;
+  const bool right =
+      (buttons & rex::input::X_INPUT_GAMEPAD_DPAD_RIGHT) != 0 || lx > kNavStickThreshold;
+  const bool up = (buttons & rex::input::X_INPUT_GAMEPAD_DPAD_UP) != 0 || ly > kNavStickThreshold;
+  const bool down =
+      (buttons & rex::input::X_INPUT_GAMEPAD_DPAD_DOWN) != 0 || ly < -kNavStickThreshold;
+  io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, left);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadRight, right);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadUp, up);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadDown, down);
 
   // A -> confirm/activate the focused widget.
   const bool a_down = (buttons & rex::input::X_INPUT_GAMEPAD_A) != 0;
@@ -311,11 +315,27 @@ void GamepadUiController::PollUiNavigation(ImGuiIO& io) {
 }
 
 void GamepadUiController::DrawModeFlash(ImGuiIO& io) {
+  // UI mode dims the game behind every overlay so it's obvious the pad is no
+  // longer driving the guest. The background draw list renders on top of the
+  // game but beneath all ImGui windows, so the overlays stay readable.
+  const bool ui_mode = mode_ == Mode::kUi;
+  if (ui_mode) {
+    // Fade the dim in over 0.2s so entering UI mode isn't a hard cut. Reuses
+    // the flash timer, which EnterUiMode() (re)starts on every entry.
+    double dim_age = NowSeconds() - flash_started_seconds_;
+    float dim_alpha = std::clamp(static_cast<float>(dim_age / 0.2), 0.0f, 1.0f);
+    ImGui::GetBackgroundDrawList()->AddRectFilled(
+        ImVec2(0.0f, 0.0f), io.DisplaySize,
+        IM_COL32(0, 0, 0, static_cast<int>(128.0f * dim_alpha)));
+  }
+
   if (!flash_active_) {
     return;
   }
   double age = NowSeconds() - flash_started_seconds_;
-  if (age >= kFlashDisplaySeconds) {
+  // In UI mode the flash stays put the whole time so it's clear the pad only
+  // drives the overlays; only the timed Gameplay flash fades out and expires.
+  if (!ui_mode && age >= kFlashDisplaySeconds) {
     flash_active_ = false;
     return;
   }
@@ -323,14 +343,13 @@ void GamepadUiController::DrawModeFlash(ImGuiIO& io) {
   float alpha = 1.0f;
   if (age < 0.2) {
     alpha = static_cast<float>(age / 0.2);
-  } else if (age > kFlashDisplaySeconds - 0.5) {
+  } else if (!ui_mode && age > kFlashDisplaySeconds - 0.5) {
     alpha = static_cast<float>((kFlashDisplaySeconds - age) / 0.5);
   }
   alpha = std::clamp(alpha, 0.0f, 1.0f);
 
-  const float pad = 24.0f;
-  ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, pad), ImGuiCond_Always,
-                          ImVec2(0.5f, 0.0f));
+  ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                          ImGuiCond_Always, ImVec2(0.5f, 0.5f));
   ImGui::SetNextWindowBgAlpha(0.75f * alpha);
   ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav |
                            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
