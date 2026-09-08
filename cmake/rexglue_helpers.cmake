@@ -132,6 +132,19 @@ function(rexglue_configure_target target_name)
                 )
             endif()
         endforeach()
+    elseif(UNIX)
+        # Stage the runtime .so files next to the host binary (paired with the
+        # $ORIGIN rpath above); $<TARGET_RUNTIME_DLLS> is empty on Linux.
+        foreach(_rexglue_runtime_lib rex::runtime rexruntime rex::TracyClient TracyClient)
+            if(TARGET ${_rexglue_runtime_lib})
+                add_custom_command(TARGET ${target_name} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        $<TARGET_FILE:${_rexglue_runtime_lib}>
+                        $<TARGET_FILE_DIR:${target_name}>
+                    VERBATIM
+                )
+            endif()
+        endforeach()
     endif()
 
     if(WIN32)
