@@ -241,6 +241,7 @@ void ImGuiDrawer::Initialize() {
   last_frame_time_ticks_ = rex::chrono::Clock::QueryHostTickCount();
 
   touch_pointer_id_ = TouchEvent::kPointerIDNone;
+  touch_pointer_owned_ = false;
   reset_mouse_position_after_next_frame_ = false;
 }
 
@@ -628,6 +629,7 @@ void ImGuiDrawer::OnTouchEvent(TouchEvent& e) {
   auto& io = GetIO();
   TouchEvent::Action action = e.action();
   uint32_t pointer_id = e.pointer_id();
+  const bool releasing = action == TouchEvent::Action::kUp || action == TouchEvent::Action::kCancel;
   if (action == TouchEvent::Action::kDown) {
     // The latest pointer needs to be controlling the ImGui mouse.
     if (touch_pointer_id_ == TouchEvent::kPointerIDNone) {
@@ -638,14 +640,30 @@ void ImGuiDrawer::OnTouchEvent(TouchEvent& e) {
       }
     }
     touch_pointer_id_ = pointer_id;
+    UpdateMousePosition(e.x(), e.y());
+    touch_pointer_owned_ = WantsPointerAt(io.MousePos);
+    if (!touch_pointer_owned_) {
+      // Park the ImGui mouse again so a press meant for the game doesn't leave
+      // a window hovered.
+      reset_mouse_position_after_next_frame_ = true;
+      return;
+    }
   } else {
     if (pointer_id != touch_pointer_id_) {
       return;
     }
+    if (!touch_pointer_owned_) {
+      // Not ours: forget it once it lifts, but never swallow the event. The
+      // listener behind us started this gesture and is the one waiting for its
+      // release; consuming that would leave it held for good.
+      if (releasing) {
+        touch_pointer_id_ = TouchEvent::kPointerIDNone;
+      }
+      return;
+    }
+    UpdateMousePosition(e.x(), e.y());
   }
-  UpdateMousePosition(e.x(), e.y());
-  const bool wants_pointer = WantsPointerAt(io.MousePos);
-  if (action == TouchEvent::Action::kUp || action == TouchEvent::Action::kCancel) {
+  if (releasing) {
     io.MouseDown[0] = false;
     touch_pointer_id_ = TouchEvent::kPointerIDNone;
     // Make sure that after a touch, the ImGui mouse isn't hovering over
@@ -655,9 +673,7 @@ void ImGuiDrawer::OnTouchEvent(TouchEvent& e) {
     io.MouseDown[0] = true;
     reset_mouse_position_after_next_frame_ = false;
   }
-  if (wants_pointer) {
-    e.set_handled(true);
-  }
+  e.set_handled(true);
 }
 
 void ImGuiDrawer::ClearInput() {
@@ -669,6 +685,7 @@ void ImGuiDrawer::ClearInput() {
   std::memset(io.MouseDown, 0, sizeof(io.MouseDown));
   io.ClearInputKeys();
   touch_pointer_id_ = TouchEvent::kPointerIDNone;
+  touch_pointer_owned_ = false;
   reset_mouse_position_after_next_frame_ = false;
 }
 
@@ -725,6 +742,7 @@ void ImGuiDrawer::UpdateMousePosition(float x, float y) {
 void ImGuiDrawer::SwitchToPhysicalMouseAndUpdateMousePosition(const MouseEvent& e) {
   if (touch_pointer_id_ != TouchEvent::kPointerIDNone) {
     touch_pointer_id_ = TouchEvent::kPointerIDNone;
+    touch_pointer_owned_ = false;
     auto& io = GetIO();
     std::memset(io.MouseDown, 0, sizeof(io.MouseDown));
     // Nothing needs to be done regarding CaptureMouse and ReleaseMouse - all
