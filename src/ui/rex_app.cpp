@@ -640,6 +640,7 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
         } else {
           debug_overlay_ = std::make_unique<ui::DebugOverlayDialog>(
               imgui_drawer_.get(), frame_stats_provider_, frame_detail_provider_);
+          debug_overlay_->SetShowPerfCounters(debug_overlay_show_perf_counters_);
         }
       },
       [this] { return static_cast<bool>(debug_overlay_); }, "Debug##overlay");
@@ -1161,6 +1162,13 @@ void ReXApp::SetDebugOverlayDetails(ui::DebugOverlayDialog::DetailProvider provi
   frame_detail_provider_ = provider;
   if (debug_overlay_) {
     debug_overlay_->SetDetailProvider(provider);
+  }
+}
+
+void ReXApp::SetDebugOverlayShowPerfCounters(bool show) {
+  debug_overlay_show_perf_counters_ = show;
+  if (debug_overlay_) {
+    debug_overlay_->SetShowPerfCounters(show);
   }
 }
 

@@ -291,6 +291,13 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   /// frame rate graphs. For numbers only the app can measure.
   void SetDebugOverlayDetails(ui::DebugOverlayDialog::DetailProvider provider);
 
+  /// Hides the debug overlay's perf-counters section (frame time graph,
+  /// draw/vert/stall counts, XMA, dispatch, threading, caches). Those counters
+  /// are only fed by the emulated Xenos GPU and XMA decoder; an app whose
+  /// renderer/audio path never touches them should turn this off rather than
+  /// show a flat graph and a wall of zeros. Defaults to shown.
+  void SetDebugOverlayShowPerfCounters(bool show);
+
   // Overrides the shader debugger overlay's (F2) data source.
   struct ShaderDebuggerOverride {
     ui::ShaderDebuggerDialog::SnapshotProvider snapshot_provider;
@@ -368,6 +375,7 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   std::unique_ptr<ui::ShaderDebuggerDialog> shader_debugger_overlay_;
   ui::DebugOverlayDialog::FrameStatsProvider frame_stats_provider_;
   ui::DebugOverlayDialog::DetailProvider frame_detail_provider_;
+  bool debug_overlay_show_perf_counters_ = true;
   ShaderDebuggerOverride shader_debugger_override_;
   std::filesystem::path config_path_;
 

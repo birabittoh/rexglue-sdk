@@ -39,12 +39,21 @@ class DebugOverlayDialog : public ImGuiDialog {
   void SetStatsProvider(FrameStatsProvider provider) { stats_provider_ = std::move(provider); }
   void SetDetailProvider(DetailProvider provider) { detail_provider_ = std::move(provider); }
 
+  /// The perf-counters section (frame time graph, draw/vert/stall counts, XMA,
+  /// dispatch, threading, caches) reads counters only an emulated Xenos GPU and
+  /// XMA decoder feed. An app with a native renderer/audio path that never
+  /// touches those counters can turn the section off here so it does not show
+  /// as a flat graph and a wall of zeros. Has no effect when the SDK was built
+  /// without REXGLUE_ENABLE_PERF_COUNTERS, since the section does not exist.
+  void SetShowPerfCounters(bool show) { show_perf_counters_ = show; }
+
  protected:
   void OnDraw(ImGuiIO& io) override;
 
  private:
   FrameStatsProvider stats_provider_;
   DetailProvider detail_provider_;
+  bool show_perf_counters_ = true;
 
   // Rolling FPS-fluctuation history, unconditional (unlike the perf-counters
   // frame-time graph below) since it only needs io.Framerate/FrameStats, both
