@@ -97,14 +97,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build build-essential git python3.12-venv
 
-      - name: Set up Android NDK
-        if: inputs.platform == 'android-arm64'
-        uses: android-actions/setup-android@v3
-
       - name: Install Android NDK
         if: inputs.platform == 'android-arm64'
         run: |
-          sdkmanager --install "ndk;27.0.12077973"
+          SDKMANAGER="$(ls "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)"
+          "$SDKMANAGER" --install "ndk;27.0.12077973"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
       - name: Install build deps (linux-amd64)
