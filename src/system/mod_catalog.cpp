@@ -236,6 +236,8 @@ std::string ModCatalog::EffectiveQueryUrl() {
 }
 
 ModCatalog::~ModCatalog() {
+  fetch_cancel_.Cancel();
+  install_cancel_.Cancel();
   if (fetch_thread_.joinable()) {
     fetch_thread_.join();
   }
@@ -277,7 +279,7 @@ void ModCatalog::Refresh() {
 void ModCatalog::FetchWorker(std::string catalog_name, std::string query_url,
                              std::string games_collection, std::string mods_collection) {
   auto game_query = StructuredQueryEqualsBody(games_collection, "recompName", catalog_name);
-  auto game_response = rex::net::HttpPostJson(query_url, game_query);
+  auto game_response = rex::net::HttpPostJson(query_url, game_query, &fetch_cancel_);
   if (!game_response.ok()) {
     REXSYS_WARN("ModCatalog: game lookup failed: {}", game_response.error.empty()
                                                           ? std::to_string(game_response.status)
@@ -294,7 +296,7 @@ void ModCatalog::FetchWorker(std::string catalog_name, std::string query_url,
   }
 
   auto mods_query = ModsForGameQueryBody(mods_collection, game_id);
-  auto mods_response = rex::net::HttpPostJson(query_url, mods_query);
+  auto mods_response = rex::net::HttpPostJson(query_url, mods_query, &fetch_cancel_);
   if (!mods_response.ok()) {
     REXSYS_WARN("ModCatalog: mods query failed: {}", mods_response.error.empty()
                                                          ? std::to_string(mods_response.status)
@@ -352,7 +354,8 @@ bool ModCatalog::InstallOneMod(const CatalogMod& entry, const std::filesystem::p
     install_result_.downloaded_bytes = downloaded;
     install_result_.total_bytes = total;
   };
-  if (!rex::net::HttpDownloadToFile(entry.asset_url, temp_zip, progress, download_error)) {
+  if (!rex::net::HttpDownloadToFile(entry.asset_url, temp_zip, progress, download_error,
+                                    &install_cancel_)) {
     std::filesystem::remove(temp_zip, ec);
     out_error = "download failed: " + download_error;
     return false;

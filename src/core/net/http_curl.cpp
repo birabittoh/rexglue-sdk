@@ -18,6 +18,25 @@
 
 namespace rex::net {
 
+// libcurl easy handles may only be touched by the thread running
+// curl_easy_perform, so cancelling here is just the flag: the transfer's
+// progress callback polls it and aborts (see ProgressCallback).
+void CancelToken::Cancel() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  cancelled_.store(true, std::memory_order_release);
+}
+
+bool CancelToken::AttachHandle(void* handle) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  handle_ = handle;
+  return !cancelled_.load(std::memory_order_acquire);
+}
+
+void CancelToken::CloseHandle() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  handle_ = nullptr;
+}
+
 namespace {
 
 constexpr long kConnectTimeoutSec = 10;
@@ -46,6 +65,7 @@ size_t WriteFileCallback(char* ptr, size_t size, size_t nmemb, void* userdata) {
 
 struct ProgressState {
   const ProgressFn* fn = nullptr;
+  CancelToken* cancel = nullptr;
 };
 
 int ProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t, curl_off_t) {
@@ -53,7 +73,21 @@ int ProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_o
   if (state->fn && *state->fn) {
     (*state->fn)(static_cast<uint64_t>(dlnow), static_cast<uint64_t>(dltotal));
   }
-  return 0;
+  // Non-zero aborts the transfer with CURLE_ABORTED_BY_CALLBACK. curl runs
+  // this roughly once a second, connect phase included, which is what keeps
+  // a cancelled request from sitting out the connect timeout.
+  return (state->cancel && state->cancel->cancelled()) ? 1 : 0;
+}
+
+// curl only calls ProgressCallback while progress meters are enabled, so a
+// cancellable request needs them on even when the caller wants no progress.
+void InstallProgressAndCancel(CURL* curl, ProgressState* state) {
+  if (!state->cancel && !(state->fn && *state->fn)) {
+    return;
+  }
+  curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ProgressCallback);
+  curl_easy_setopt(curl, CURLOPT_XFERINFODATA, state);
 }
 
 bool IsHttpsUrl(std::string_view url) {
@@ -62,8 +96,12 @@ bool IsHttpsUrl(std::string_view url) {
 
 }  // namespace
 
-HttpResponse HttpGet(std::string_view url, const ProgressFn& progress) {
+HttpResponse HttpGet(std::string_view url, const ProgressFn& progress, CancelToken* cancel) {
   HttpResponse response;
+  if (cancel && cancel->cancelled()) {
+    response.error = "cancelled";
+    return response;
+  }
   if (!IsHttpsUrl(url)) {
     response.error = "only https:// URLs are supported";
     return response;
@@ -88,12 +126,8 @@ HttpResponse HttpGet(std::string_view url, const ProgressFn& progress) {
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
   curl_easy_setopt(curl, CURLOPT_USERAGENT, "rex-net-http/1.0");
 
-  ProgressState state{&progress};
-  if (progress) {
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ProgressCallback);
-    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &state);
-  }
+  ProgressState state{&progress, cancel};
+  InstallProgressAndCancel(curl, &state);
 
   CURLcode result = curl_easy_perform(curl);
   if (result != CURLE_OK) {
@@ -107,8 +141,12 @@ HttpResponse HttpGet(std::string_view url, const ProgressFn& progress) {
   return response;
 }
 
-HttpResponse HttpPostJson(std::string_view url, std::string_view json_body) {
+HttpResponse HttpPostJson(std::string_view url, std::string_view json_body, CancelToken* cancel) {
   HttpResponse response;
+  if (cancel && cancel->cancelled()) {
+    response.error = "cancelled";
+    return response;
+  }
   if (!IsHttpsUrl(url)) {
     response.error = "only https:// URLs are supported";
     return response;
@@ -138,6 +176,9 @@ HttpResponse HttpPostJson(std::string_view url, std::string_view json_body) {
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
   curl_easy_setopt(curl, CURLOPT_USERAGENT, "rex-net-http/1.0");
 
+  ProgressState state{nullptr, cancel};
+  InstallProgressAndCancel(curl, &state);
+
   CURLcode result = curl_easy_perform(curl);
   if (result != CURLE_OK) {
     response.error = curl_easy_strerror(result);
@@ -152,7 +193,11 @@ HttpResponse HttpPostJson(std::string_view url, std::string_view json_body) {
 }
 
 bool HttpDownloadToFile(std::string_view url, const std::filesystem::path& dest,
-                        const ProgressFn& progress, std::string& error) {
+                        const ProgressFn& progress, std::string& error, CancelToken* cancel) {
+  if (cancel && cancel->cancelled()) {
+    error = "cancelled";
+    return false;
+  }
   if (!IsHttpsUrl(url)) {
     error = "only https:// URLs are supported";
     return false;
@@ -183,12 +228,8 @@ bool HttpDownloadToFile(std::string_view url, const std::filesystem::path& dest,
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
   curl_easy_setopt(curl, CURLOPT_USERAGENT, "rex-net-http/1.0");
 
-  ProgressState state{&progress};
-  if (progress) {
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ProgressCallback);
-    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &state);
-  }
+  ProgressState state{&progress, cancel};
+  InstallProgressAndCancel(curl, &state);
 
   CURLcode result = curl_easy_perform(curl);
   long status = 0;

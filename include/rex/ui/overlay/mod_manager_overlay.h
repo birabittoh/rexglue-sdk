@@ -28,6 +28,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include <rex/net/http.h>            // CancelToken
 #include <rex/system/mod_catalog.h>  // CatalogMod, ModCatalog
 #include <rex/system/mod_plugin.h>   // ModInfo
 #include <rex/system/mod_state.h>    // ModStateEntry, ModIssue
@@ -60,6 +61,12 @@ class ModManagerDialog : public ImGuiDialog {
   // sideload/install is already in flight; a second drop while one is
   // running is ignored rather than queued.
   void SideloadArchive(std::filesystem::path zip_path);
+
+  // F1 hides and reshows this dialog rather than destroying it: tearing it
+  // down has to join its catalog/icon workers, and a fresh one would re-run
+  // the catalog query on every open.
+  void SetVisible(bool visible) { visible_ = visible; }
+  bool IsVisible() const { return visible_; }
 
  protected:
   void OnDraw(ImGuiIO& io) override;
@@ -147,6 +154,8 @@ class ModManagerDialog : public ImGuiDialog {
   std::mutex remote_icon_mutex_;
   std::unordered_map<std::string, std::vector<uint8_t>> remote_icon_bytes_;
   std::unordered_map<std::string, std::thread> icon_downloads_;
+  // Shared by every icon worker, so one Cancel() aborts them all.
+  rex::net::CancelToken icon_cancel_;
 
   // Sideload (drag-and-drop zip install) state; see SideloadArchive.
   struct SideloadResult {
@@ -165,6 +174,8 @@ class ModManagerDialog : public ImGuiDialog {
   // Id of the mod to auto-scroll to and highlight in the Installed tab, on
   // the next draw after a successful sideload. Cleared once applied.
   std::string focus_mod_id_;
+
+  bool visible_ = true;
 };
 
 }  // namespace rex::ui

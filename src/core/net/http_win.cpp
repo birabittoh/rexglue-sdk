@@ -27,6 +27,36 @@
 
 namespace rex::net {
 
+// Closing the request handle makes whichever WinHTTP call is blocked on it
+// (send, receive, read) fail right away, which is the only way out of a
+// connect that would otherwise run the full timeout.
+void CancelToken::Cancel() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  cancelled_.store(true, std::memory_order_release);
+  if (handle_) {
+    WinHttpCloseHandle(static_cast<HINTERNET>(handle_));
+    handle_ = nullptr;
+  }
+}
+
+bool CancelToken::AttachHandle(void* handle) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (cancelled_.load(std::memory_order_acquire)) {
+    WinHttpCloseHandle(static_cast<HINTERNET>(handle));
+    return false;
+  }
+  handle_ = handle;
+  return true;
+}
+
+void CancelToken::CloseHandle() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (handle_) {
+    WinHttpCloseHandle(static_cast<HINTERNET>(handle_));
+    handle_ = nullptr;
+  }
+}
+
 namespace {
 
 constexpr DWORD kConnectTimeoutMs = 10000;
@@ -105,8 +135,12 @@ class Session {
 HttpResponse DoRequest(std::string_view url, const wchar_t* method, std::string_view body,
                        const char* content_type,
                        const std::function<void(const uint8_t*, size_t)>& on_data,
-                       const ProgressFn& progress) {
+                       const ProgressFn& progress, CancelToken* cancel) {
   HttpResponse response;
+  if (cancel && cancel->cancelled()) {
+    response.error = "cancelled";
+    return response;
+  }
   ParsedUrl parsed = ParseHttpsUrl(url);
   if (!parsed.ok) {
     response.error = "only https:// URLs are supported";
@@ -134,6 +168,21 @@ HttpResponse DoRequest(std::string_view url, const wchar_t* method, std::string_
     return response;
   }
 
+  // While attached the token owns `request`, so exactly one of the two
+  // closes it and a Cancel() landing mid-request aborts the blocked call.
+  if (cancel && !cancel->AttachHandle(request)) {
+    WinHttpCloseHandle(connect);
+    response.error = "cancelled";
+    return response;
+  }
+  auto close_request = [&] {
+    if (cancel) {
+      cancel->CloseHandle();
+    } else {
+      WinHttpCloseHandle(request);
+    }
+  };
+
   std::wstring headers;
   if (content_type) {
     headers = L"Content-Type: ";
@@ -150,9 +199,10 @@ HttpResponse DoRequest(std::string_view url, const wchar_t* method, std::string_
     sent = WinHttpReceiveResponse(request, nullptr);
   }
   if (!sent) {
-    response.error =
-        "request failed (network/TLS error, code " + std::to_string(GetLastError()) + ")";
-    WinHttpCloseHandle(request);
+    response.error = (cancel && cancel->cancelled()) ? "cancelled"
+                                                     : "request failed (network/TLS error, code " +
+                                                           std::to_string(GetLastError()) + ")";
+    close_request();
     WinHttpCloseHandle(connect);
     return response;
   }
@@ -193,38 +243,39 @@ HttpResponse DoRequest(std::string_view url, const wchar_t* method, std::string_
     }
   }
 
-  WinHttpCloseHandle(request);
+  close_request();
   WinHttpCloseHandle(connect);
   return response;
 }
 
 }  // namespace
 
-HttpResponse HttpGet(std::string_view url, const ProgressFn& progress) {
+HttpResponse HttpGet(std::string_view url, const ProgressFn& progress, CancelToken* cancel) {
   std::string body;
   HttpResponse response = DoRequest(
       url, L"GET", {}, nullptr,
       [&](const uint8_t* data, size_t len) {
         body.append(reinterpret_cast<const char*>(data), len);
       },
-      progress);
+      progress, cancel);
   response.body = std::move(body);
   return response;
 }
 
-HttpResponse HttpPostJson(std::string_view url, std::string_view json_body) {
+HttpResponse HttpPostJson(std::string_view url, std::string_view json_body, CancelToken* cancel) {
   std::string body;
-  HttpResponse response = DoRequest(url, L"POST", json_body, "application/json",
-                                    [&](const uint8_t* data, size_t len) {
-                                      body.append(reinterpret_cast<const char*>(data), len);
-                                    },
-                                    {});
+  HttpResponse response = DoRequest(
+      url, L"POST", json_body, "application/json",
+      [&](const uint8_t* data, size_t len) {
+        body.append(reinterpret_cast<const char*>(data), len);
+      },
+      {}, cancel);
   response.body = std::move(body);
   return response;
 }
 
 bool HttpDownloadToFile(std::string_view url, const std::filesystem::path& dest,
-                        const ProgressFn& progress, std::string& error) {
+                        const ProgressFn& progress, std::string& error, CancelToken* cancel) {
   std::ofstream out(dest, std::ios::binary | std::ios::trunc);
   if (!out) {
     error = "failed to open destination file for writing";
@@ -233,7 +284,7 @@ bool HttpDownloadToFile(std::string_view url, const std::filesystem::path& dest,
   HttpResponse response = DoRequest(
       url, L"GET", {}, nullptr,
       [&](const uint8_t* data, size_t len) { out.write(reinterpret_cast<const char*>(data), len); },
-      progress);
+      progress, cancel);
   out.close();
   if (!response.error.empty()) {
     error = response.error;

@@ -163,6 +163,7 @@ ModManagerDialog::ModManagerDialog(ImGuiDrawer* imgui_drawer, ImmediateDrawer* i
       config_path_(std::move(config_path)) {}
 
 ModManagerDialog::~ModManagerDialog() {
+  icon_cancel_.Cancel();
   for (auto& [url, thread] : icon_downloads_) {
     if (thread.joinable())
       thread.join();
@@ -276,7 +277,7 @@ ImmediateTexture* ModManagerDialog::GetRemoteIcon(const std::string& url) {
       remote_icon_bytes_.erase(bytes_it);
     } else if (!icon_downloads_.contains(url)) {
       icon_downloads_.emplace(url, std::thread([this, url] {
-                                auto response = rex::net::HttpGet(url);
+                                auto response = rex::net::HttpGet(url, {}, &icon_cancel_);
                                 if (response.ok()) {
                                   std::lock_guard<std::mutex> lock2(remote_icon_mutex_);
                                   remote_icon_bytes_[url] = std::vector<uint8_t>(
@@ -296,6 +297,9 @@ ImmediateTexture* ModManagerDialog::GetRemoteIcon(const std::string& url) {
 }
 
 void ModManagerDialog::OnDraw(ImGuiIO& io) {
+  if (!visible_) {
+    return;
+  }
   if (!loaded_) {
     ReloadFromDisk();
     if (runtime_ && !runtime_->catalog_name().empty()) {

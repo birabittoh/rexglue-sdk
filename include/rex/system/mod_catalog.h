@@ -33,6 +33,7 @@
 #include <vector>
 
 #include <rex/cvar.h>
+#include <rex/net/http.h>
 
 REXCVAR_DECLARE(std::string, mod_catalog_project);
 REXCVAR_DECLARE(std::string, mod_catalog_api_key);
@@ -136,11 +137,15 @@ class ModCatalog {
 
   std::thread fetch_thread_;
   std::atomic<bool> fetch_in_flight_{false};
+  // Aborts the in-flight request so the destructor's join returns now
+  // instead of waiting out the HTTP timeout on the caller's thread.
+  rex::net::CancelToken fetch_cancel_;
 
   std::thread install_thread_;
   std::atomic<bool> install_in_flight_{false};
   mutable std::mutex install_mutex_;
   CatalogInstallResult install_result_;
+  rex::net::CancelToken install_cancel_;
 };
 
 // Parses a runQuery JSON response body into rows (skipping any element with

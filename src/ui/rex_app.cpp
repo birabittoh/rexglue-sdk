@@ -684,14 +684,22 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
   rex::ui::RegisterBind(
       "bind_mod_manager", "F1", "Toggle mod manager overlay",
       [this, drawer] {
+        // Hidden rather than destroyed: ~ModManagerDialog joins its catalog
+        // and icon workers, which parks the UI thread for a full HTTP
+        // timeout, and a fresh dialog re-runs the catalog query every open.
         if (mod_manager_overlay_) {
-          mod_manager_overlay_.reset();
+          auto* dialog = static_cast<ui::ModManagerDialog*>(mod_manager_overlay_.get());
+          dialog->SetVisible(!dialog->IsVisible());
         } else {
           mod_manager_overlay_ = std::make_unique<ui::ModManagerDialog>(
               imgui_drawer_.get(), drawer, runtime_.get(), window_.get(), config_path_);
         }
       },
-      [this] { return static_cast<bool>(mod_manager_overlay_); }, "Mods##overlay");
+      [this] {
+        return mod_manager_overlay_ &&
+               static_cast<ui::ModManagerDialog*>(mod_manager_overlay_.get())->IsVisible();
+      },
+      "Mods##overlay");
   rex::ui::RegisterBind(
       "bind_achievements", "F7", "Toggle achievements overlay",
       [this] {
@@ -1084,7 +1092,9 @@ void ReXApp::OnFileDrop(ui::FileDropEvent& e) {
     mod_manager_overlay_ = std::make_unique<ui::ModManagerDialog>(
         imgui_drawer_.get(), immediate_drawer_.get(), runtime_.get(), window_.get(), config_path_);
   }
-  static_cast<ui::ModManagerDialog*>(mod_manager_overlay_.get())->SideloadArchive(e.filename());
+  auto* dialog = static_cast<ui::ModManagerDialog*>(mod_manager_overlay_.get());
+  dialog->SetVisible(true);
+  dialog->SideloadArchive(e.filename());
 }
 
 void ReXApp::OnDestroy() {
