@@ -112,6 +112,7 @@ class GamepadUiController : public ImGuiDialog {
   bool b_was_down_ = false;
   bool x_was_down_ = false;
   bool y_was_down_ = false;
+  bool gameplay_mode_pending_ = false;
 
   // Mode-change flash timer; unset when no flash is showing.
   bool flash_active_ = false;

@@ -200,6 +200,15 @@ void GamepadUiController::PollUiNavigation(ImGuiIO& io) {
   input_system_->GetState(0, &state);
   const uint16_t buttons = state.gamepad.buttons;
 
+  if (gameplay_mode_pending_) {
+    if ((buttons & rex::input::X_INPUT_GAMEPAD_B) == 0) {
+      gameplay_mode_pending_ = false;
+      b_was_down_ = false;
+      EnterGameplayMode();
+    }
+    return;
+  }
+
   const bool guide_down = (buttons & rex::input::X_INPUT_GAMEPAD_GUIDE) != 0;
   if (guide_down && !guide_was_down_) {
     guide_was_down_ = guide_down;
@@ -250,7 +259,8 @@ void GamepadUiController::PollUiNavigation(ImGuiIO& io) {
       }
     }
     if (!any_left) {
-      EnterGameplayMode();
+      // Keep the closing press away from the guest until it is released.
+      gameplay_mode_pending_ = true;
     }
   }
   b_was_down_ = b_down;
