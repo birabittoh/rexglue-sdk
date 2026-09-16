@@ -83,8 +83,14 @@ class ShaderDebuggerDialog : public ImGuiDialog {
   // is loaded. Returns an empty vector if the file is missing or unreadable.
   static std::vector<uint64_t> ReadShaderBlacklistFromToml(const std::filesystem::path& path);
 
+  // Fired just before the dialog deletes itself after its title bar X is
+  // clicked. An owner holding this dialog must drop its (now dangling)
+  // pointer here, or its next access double frees it.
+  void SetOnClose(std::function<void()> on_close) { on_close_ = std::move(on_close); }
+
  protected:
   void OnDraw(ImGuiIO& io) override;
+  void OnClose() override;
 
  private:
   void DrawShaderTable();
@@ -108,6 +114,7 @@ class ShaderDebuggerDialog : public ImGuiDialog {
   BinaryReplacer binary_replacer_;
   ProfilingToggle profiling_toggle_;
   ProfilingResetter profiling_resetter_;
+  std::function<void()> on_close_;
 
   char filter_buf_[128] = {};
   bool show_vertex_ = true;

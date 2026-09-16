@@ -858,6 +858,9 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
               imgui_drawer_.get(), std::move(snapshot_provider), std::move(disable_setter),
               std::move(details_provider), std::move(binary_replacer), std::move(profiling_toggle),
               std::move(profiling_resetter), shaders_toml_path);
+          // The dialog deletes itself when closed with its X, so let go of it
+          // instead of freeing it a second time on the next toggle.
+          shader_debugger_overlay_->SetOnClose([this] { shader_debugger_overlay_.release(); });
         }
       },
       [this] { return static_cast<bool>(shader_debugger_overlay_); }, "Shader Debugger");

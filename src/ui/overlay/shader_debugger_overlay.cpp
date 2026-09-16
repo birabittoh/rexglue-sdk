@@ -468,6 +468,12 @@ void ShaderDebuggerDialog::RefreshSelectedDetails() {
   }
 }
 
+void ShaderDebuggerDialog::OnClose() {
+  if (on_close_) {
+    on_close_();
+  }
+}
+
 void ShaderDebuggerDialog::OnDraw(ImGuiIO& io) {
   ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                           ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
