@@ -630,6 +630,8 @@ void ImGuiDrawer::OnTouchEvent(TouchEvent& e) {
   TouchEvent::Action action = e.action();
   uint32_t pointer_id = e.pointer_id();
   const bool releasing = action == TouchEvent::Action::kUp || action == TouchEvent::Action::kCancel;
+  float physical_to_logical = float(window_->GetMediumDpi()) / float(window_->GetDpi());
+  ImVec2 position(e.x() * physical_to_logical, e.y() * physical_to_logical);
   if (action == TouchEvent::Action::kDown) {
     // The latest pointer needs to be controlling the ImGui mouse.
     if (touch_pointer_id_ == TouchEvent::kPointerIDNone) {
@@ -640,8 +642,7 @@ void ImGuiDrawer::OnTouchEvent(TouchEvent& e) {
       }
     }
     touch_pointer_id_ = pointer_id;
-    UpdateMousePosition(e.x(), e.y());
-    touch_pointer_owned_ = WantsPointerAt(io.MousePos);
+    touch_pointer_owned_ = WantsPointerAt(position);
     if (!touch_pointer_owned_) {
       // Park the ImGui mouse again so a press meant for the game doesn't leave
       // a window hovered.
@@ -661,16 +662,16 @@ void ImGuiDrawer::OnTouchEvent(TouchEvent& e) {
       }
       return;
     }
-    UpdateMousePosition(e.x(), e.y());
   }
+  io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+  io.AddMousePosEvent(position.x, position.y);
   if (releasing) {
-    io.MouseDown[0] = false;
+    io.AddMouseButtonEvent(0, false);
+    io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
     touch_pointer_id_ = TouchEvent::kPointerIDNone;
-    // Make sure that after a touch, the ImGui mouse isn't hovering over
-    // anything.
-    reset_mouse_position_after_next_frame_ = true;
+    reset_mouse_position_after_next_frame_ = false;
   } else {
-    io.MouseDown[0] = true;
+    io.AddMouseButtonEvent(0, true);
     reset_mouse_position_after_next_frame_ = false;
   }
   e.set_handled(true);
