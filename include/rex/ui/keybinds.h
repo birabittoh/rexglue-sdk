@@ -151,15 +151,15 @@ std::vector<BindView> SnapshotBinds();
 
 /**
  * Sets a bind's effective key, validating @p key as either a keyboard key
- * (ParseVirtualKey, dispatched by ProcessKeyEvent) or a gamepad button name
- * (ParseGamepadButton, dispatched by PollGamepadBinds). Persists the change
- * via the bind's backing CVAR
+ * (ParseVirtualKey, dispatched by ProcessKeyEvent), a gamepad button name
+ * (ParseGamepadButton, dispatched by PollGamepadBinds), or empty to leave the
+ * action registered without a shortcut. Persists the change via the bind's backing CVAR
  * (rex::cvar::SetFlagByName(name, key, /*persist=*\/true)) so it survives
  * across restarts and is treated as an explicit user choice, not subject to
  * future auto-reassignment. Clears any recorded conflict for this bind.
  *
- * @return false if @p name is not a registered bind or @p key is not a
- *         recognized key/button name.
+ * @return false if @p name is not a registered bind or a non-empty @p key is
+ *         not a recognized key/button name.
  */
 bool SetBindKey(std::string_view name, std::string_view key);
 

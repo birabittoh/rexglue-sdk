@@ -381,7 +381,7 @@ bool SetBindKey(std::string_view name, std::string_view key) {
   // future fully-gamepad-navigable overlay work), but the rebind UI and this
   // storage format need to represent one today rather than being retrofitted
   // later.
-  if (ParseVirtualKey(key) == VirtualKey::kNone && ParseGamepadButton(key) == 0) {
+  if (!key.empty() && ParseVirtualKey(key) == VirtualKey::kNone && ParseGamepadButton(key) == 0) {
     return false;
   }
 
