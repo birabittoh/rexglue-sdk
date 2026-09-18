@@ -353,12 +353,20 @@ std::vector<ModStateEntry> ModState::AutoSort(
 
 std::string ModState::HostPlatformId() {
 #if defined(_WIN32)
-  return "windows-x64";
+  return "win-amd64";
 #elif defined(__aarch64__) || defined(_M_ARM64)
   return "linux-arm64";
 #else
-  return "linux-x64";
+  return "linux-amd64";
 #endif
+}
+
+std::string ModState::LegacyPlatformId(std::string_view platform) {
+  if (platform == "win-amd64")
+    return "windows-x64";
+  if (platform == "linux-amd64")
+    return "linux-x64";
+  return std::string(platform);
 }
 
 std::vector<ModIssue> ModState::Validate(const std::vector<ModStateEntry>& entries,
@@ -405,7 +413,9 @@ std::vector<ModIssue> ModState::Validate(const std::vector<ModStateEntry>& entri
                     "\" is a code mod but declares no platform binaries; it can't load. Update "
                     "or remove it.");
       } else if (std::find(info.platforms.begin(), info.platforms.end(),
-                           std::string(host_platform)) == info.platforms.end()) {
+                           std::string(host_platform)) == info.platforms.end() &&
+                 std::find(info.platforms.begin(), info.platforms.end(),
+                           LegacyPlatformId(host_platform)) == info.platforms.end()) {
         std::string ships;
         for (size_t k = 0; k < info.platforms.size(); ++k) {
           if (k)
