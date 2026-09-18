@@ -10,6 +10,7 @@
  */
 
 #include <rex/system/mod_plugin.h>
+#include <rex/system/mod_state.h>
 
 #include <filesystem>
 #include <fstream>
@@ -41,21 +42,21 @@ std::string ModFileName(std::string_view stem, std::string_view postfix) {
 #endif
 }
 
-// Matches the "windows-x64" / "linux-x64" / "linux-arm64" / "mac-arm64" /
+// Matches the "win-amd64" / "linux-amd64" / "linux-arm64" / "mac-arm64" /
 // "android-arm64" keys mod-build
 // tooling (e.g. NocturneRecomp-Mods' scripts/make_mods.py) already writes
 // into a mod's `platform` manifest field, so a mod distribution zip can ship
 // one `code/<platform>/` subdirectory per platform side by side, needed in
-// particular because linux-x64 and linux-arm64 both build to the same
+// particular because linux-amd64 and linux-arm64 both build to the same
 // lib<stem>.so name and would otherwise collide in a flat code/ directory.
 constexpr std::string_view ModPlatformDir() {
 #if REX_PLATFORM_WIN32
-  return "windows-x64";
+  return "win-amd64";
 #elif REX_PLATFORM_MAC
 #if defined(REX_ARCH_ARM64)
   return "mac-arm64";
 #elif defined(REX_ARCH_AMD64)
-  return "mac-x64";
+  return "mac-amd64";
 #else
   return "";
 #endif
@@ -66,7 +67,7 @@ constexpr std::string_view ModPlatformDir() {
 #if defined(REX_ARCH_ARM64)
   return "android-arm64";
 #elif defined(REX_ARCH_AMD64)
-  return "android-x64";
+  return "android-amd64";
 #else
   return "";
 #endif
@@ -74,7 +75,7 @@ constexpr std::string_view ModPlatformDir() {
 #if defined(REX_ARCH_ARM64)
   return "linux-arm64";
 #elif defined(REX_ARCH_AMD64)
-  return "linux-x64";
+  return "linux-amd64";
 #else
   return "";
 #endif
@@ -142,15 +143,18 @@ std::unique_ptr<IModPlugin> LoadModPlugin(const std::filesystem::path& mod_root,
   // Try <platform>/<file> first (a multi-platform distribution, e.g. one
   // pulled straight from a NocturneRecomp-Mods release zip, ships all
   // platforms' binaries side by side this way and expects the host to pick
-  // its own), then fall back to a flat code/<file> layout (a mod built and
-  // installed for this host's platform only, the common local-dev case).
+  // its own), then the legacy platform directory (e.g. code/windows-x64/),
+  // then fall back to a flat code/<file> layout (a mod built and installed
+  // for this host's platform only, the common local-dev case).
   auto resolve = [&](std::string_view postfix) -> std::filesystem::path {
     std::string_view platform_dir = ModPlatformDir();
     if (!platform_dir.empty()) {
-      std::filesystem::path platform_path =
-          code_dir / platform_dir / ModFileName(code_stem, postfix);
-      if (std::filesystem::exists(platform_path)) {
-        return platform_path;
+      for (const std::string& dir :
+           {std::string(platform_dir), ModState::LegacyPlatformId(platform_dir)}) {
+        std::filesystem::path platform_path = code_dir / dir / ModFileName(code_stem, postfix);
+        if (std::filesystem::exists(platform_path)) {
+          return platform_path;
+        }
       }
     }
     return code_dir / ModFileName(code_stem, postfix);

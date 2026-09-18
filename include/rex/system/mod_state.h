@@ -153,17 +153,22 @@ class ModState {
   // instead of only logged. `host_version` is compared against each mod's
   // min_game_version (empty = "unknown", same can't-verify-so-warn
   // semantics as an empty RuntimeConfig::game_version). `host_platform` is
-  // this host's platform id (e.g. "windows-x64", "linux-x64",
-  // "linux-arm64", "mac-arm64").
+  // this host's platform id (e.g. "win-amd64", "linux-amd64",
+  // "linux-arm64", "mac-arm64") or its LegacyPlatformId().
   static std::vector<ModIssue> Validate(const std::vector<ModStateEntry>& entries,
                                         const std::unordered_map<std::string, ModInfo>& manifests,
                                         std::string_view host_version,
                                         std::string_view host_platform);
 
   // This process's platform id in the "platform" mod.toml key convention
-  // (e.g. "windows-x64", "linux-x64", "linux-arm64", "mac-arm64",
-  // "android-arm64").
+  // (e.g. "win-amd64", "linux-amd64", "linux-arm64", "mac-arm64",
+  // "android-arm64"), matching the SDK release names.
   static std::string HostPlatformId();
+
+  // The pre-rename spelling of a platform id ("win-amd64" -> "windows-x64",
+  // "linux-amd64" -> "linux-x64", etc.); arm64 ids are returned unchanged.
+  // Accepted by Validate() and LoadModPlugin() for mods published under it.
+  static std::string LegacyPlatformId(std::string_view platform);
 
   // Sideloads a local mod archive (.zip) dropped onto the game window:
   // extracts it into `root`, mirroring the same top-level-directory

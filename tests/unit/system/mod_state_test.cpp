@@ -188,7 +188,7 @@ TEST_CASE("ModState: Validate reports an error for a missing requires dependency
   ui_color.requires_mods.push_back({"game_symbols", ""});
   manifests.emplace("ui_color", ui_color);
 
-  auto issues = ModState::Validate(entries, manifests, "", "windows-x64");
+  auto issues = ModState::Validate(entries, manifests, "", "win-amd64");
   REQUIRE(issues.size() == 1);
   CHECK(issues[0].id == "ui_color");
   CHECK(issues[0].kind == ModIssue::Kind::kError);
@@ -202,7 +202,7 @@ TEST_CASE("ModState: Validate is clean when requires is satisfied and ordered", 
   manifests.emplace("ui_color", ui_color);
   manifests.emplace("game_symbols", MakeInfo("game_symbols"));
 
-  auto issues = ModState::Validate(entries, manifests, "", "windows-x64");
+  auto issues = ModState::Validate(entries, manifests, "", "win-amd64");
   CHECK(issues.empty());
 }
 
@@ -211,10 +211,10 @@ TEST_CASE("ModState: Validate flags a code mod with no binary for this platform"
   std::unordered_map<std::string, ModInfo> manifests;
   auto native_mod = MakeInfo("native_mod");
   native_mod.code = "native_mod";
-  native_mod.platforms = {"linux-x64"};
+  native_mod.platforms = {"linux-amd64"};
   manifests.emplace("native_mod", native_mod);
 
-  auto issues = ModState::Validate(entries, manifests, "", "windows-x64");
+  auto issues = ModState::Validate(entries, manifests, "", "win-amd64");
   REQUIRE(issues.size() == 1);
   CHECK(issues[0].kind == ModIssue::Kind::kError);
 }
@@ -225,11 +225,34 @@ TEST_CASE("ModState: Validate is clean when the code mod ships this host's platf
   std::unordered_map<std::string, ModInfo> manifests;
   auto native_mod = MakeInfo("native_mod");
   native_mod.code = "native_mod";
-  native_mod.platforms = {"windows-x64", "linux-x64"};
+  native_mod.platforms = {"win-amd64", "linux-amd64"};
   manifests.emplace("native_mod", native_mod);
 
-  auto issues = ModState::Validate(entries, manifests, "", "windows-x64");
+  auto issues = ModState::Validate(entries, manifests, "", "win-amd64");
   CHECK(issues.empty());
+}
+
+TEST_CASE("ModState: Validate accepts a code mod published under the pre-rename platform id",
+          "[mod_state]") {
+  std::vector<ModStateEntry> entries = {{"native_mod", true}};
+  std::unordered_map<std::string, ModInfo> manifests;
+  auto native_mod = MakeInfo("native_mod");
+  native_mod.code = "native_mod";
+  native_mod.platforms = {"windows-x64"};
+  manifests.emplace("native_mod", native_mod);
+
+  auto issues = ModState::Validate(entries, manifests, "", "win-amd64");
+  CHECK(issues.empty());
+}
+
+TEST_CASE("ModState: LegacyPlatformId maps only the renamed amd64 ids", "[mod_state]") {
+  CHECK(ModState::LegacyPlatformId("win-amd64") == "windows-x64");
+  CHECK(ModState::LegacyPlatformId("linux-amd64") == "linux-x64");
+  CHECK(ModState::LegacyPlatformId("mac-amd64") == "mac-x64");
+  CHECK(ModState::LegacyPlatformId("android-amd64") == "android-x64");
+  CHECK(ModState::LegacyPlatformId("linux-arm64") == "linux-arm64");
+  CHECK(ModState::LegacyPlatformId("mac-arm64") == "mac-arm64");
+  CHECK(ModState::LegacyPlatformId("android-arm64") == "android-arm64");
 }
 
 TEST_CASE("ModState: Validate reports a conflict for both sides regardless of order",
@@ -241,7 +264,7 @@ TEST_CASE("ModState: Validate reports a conflict for both sides regardless of or
   manifests.emplace("a", a);
   manifests.emplace("b", MakeInfo("b"));
 
-  auto issues = ModState::Validate(entries, manifests, "", "windows-x64");
+  auto issues = ModState::Validate(entries, manifests, "", "win-amd64");
   REQUIRE(issues.size() == 2);
   CHECK(issues[0].kind == ModIssue::Kind::kError);
   CHECK(issues[1].kind == ModIssue::Kind::kError);

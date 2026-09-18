@@ -101,13 +101,13 @@ struct RuntimeConfig {
   // this build apart from other variants a release publishes for the same
   // platform (e.g. vanilla vs. title-update). Supports the placeholders
   // "{tag}" (the release's tag_name, e.g. "v1.4.0") and "{platform}" (this
-  // host's platform id, e.g. "windows-x64"; see
+  // host's platform id, e.g. "win-amd64"; see
   // system::ModState::HostPlatformId()). The extension (".zip" on Windows,
   // ".dmg" on macOS, ".tar.gz" elsewhere) is appended automatically, so the
   // published asset names have to match it. Empty disables
   // auto-update entirely, same as an empty `update_repo`. Example:
   // "nocturnerecomp-tu-{tag}-{platform}" matches the
-  // "nocturnerecomp-tu-v1.4.0-windows-x64.zip" asset of a title-update build.
+  // "nocturnerecomp-tu-v1.4.0-win-amd64.zip" asset of a title-update build.
   std::string update_asset_format;
   // One-shot message shown top-left for a few seconds as the game starts
   // (see rex::ui::HintToastDialog), set in OnPreSetup(). Empty (the

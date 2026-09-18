@@ -345,7 +345,8 @@ The SDK's own `ModInfo`/`ParseModInfo` now parses a `platform` key into
   and by `ModCatalog`'s "All" tab compatibility check) treats a code mod
   (one with a `code` key) that declares no `platform` entries, or whose
   `platform` list doesn't include the running host's platform id
-  (`windows-x64`/`linux-x64`/`linux-arm64`/`mac-arm64`), as a **hard error**, the same
+  (`win-amd64`/`linux-amd64`/`linux-arm64`/`mac-arm64`, or its pre-rename
+  spelling such as `windows-x64`, see below), as a **hard error**, the same
   severity as an unmet `requires` version constraint, surfaced as a
   per-row `[error]` badge the player has to act on (update, disable, or
   remove the mod). This is the primary enforcement point, since it runs
@@ -366,7 +367,7 @@ only reads and enforces what's already there.
 
 The convention: a `platform` key in a code mod's `mod.toml`, holding a
 comma-separated list of target identifiers (e.g.
-`"windows-x64,linux-x64,linux-arm64,mac-arm64"`) recording which platform(s) that
+`"win-amd64,linux-amd64,linux-arm64,mac-arm64"`) recording which platform(s) that
 mod's `code/` directory currently ships a binary for. It is written by the
 build tooling after a build, not by the mod author, and reflects what's
 actually on disk right now, not a request or a restriction to build for
@@ -376,17 +377,24 @@ that platform.
 target identifiers as an optional subdirectory under `code/`: it first looks
 for `code/<platform>/<stem>.dll` (or `lib<stem>.so`, `lib<stem>.dylib`),
 where `<platform>` is
-whichever one of `windows-x64`, `linux-x64`, `linux-arm64`, `mac-arm64`
+whichever one of `win-amd64`, `linux-amd64`, `linux-arm64`, `mac-arm64`
 matches the
-running host (`REX_PLATFORM_*`/`REX_ARCH_*` at compile time), and falls back
+running host (`REX_PLATFORM_*`/`REX_ARCH_*` at compile time), then the same
+directory under its pre-rename name, and falls back
 to the flat `code/<stem>.dll`/`code/lib<stem>.so` if no matching
 subdirectory exists. This is what lets a single mod folder, and therefore
 a single distributed archive, carry binaries for every platform side by
-side: a flat `code/` can hold at most one Linux `.so` (linux-x64 and
+side: a flat `code/` can hold at most one Linux `.so` (linux-amd64 and
 linux-arm64 both build to the same `lib<stem>.so` name and would collide),
 so multi-platform distributions need the subdirectory form for at least the
 two Linux targets. A locally-built, single-platform mod can still use the
 flat layout; both are checked.
+
+The amd64 ids used to be spelled `windows-x64`, `linux-x64`, `mac-x64` and
+`android-x64` (arm64 ids never changed). `ModState::LegacyPlatformId()` maps
+the current id back to that spelling, and both `Validate` and
+`LoadModPlugin` accept it, so mods published before the rename keep
+loading without being repackaged.
 
 Asset-only mods (no `code` key) have nothing to record: they ship no native
 binary, so there is no per-platform artifact to track, and none of this

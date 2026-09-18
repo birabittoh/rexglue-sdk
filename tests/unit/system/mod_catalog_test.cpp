@@ -51,7 +51,7 @@ TEST_CASE("ModCatalog: ParseModsResponse unwraps typed fields", "[mod_catalog]")
       "gameVersion": {"stringValue": "1.2.0"},
       "requires":  {"arrayValue": {}},
       "platform":  {"arrayValue": {"values": [
-        {"stringValue": "windows-x64"}, {"stringValue": "linux-x64"}]}}
+        {"stringValue": "win-amd64"}, {"stringValue": "linux-amd64"}]}}
     }}}])";
 
   auto mods = ParseModsResponse(body);
@@ -66,7 +66,7 @@ TEST_CASE("ModCatalog: ParseModsResponse unwraps typed fields", "[mod_catalog]")
   CHECK(mod.checksum == "deadbeef");
   CHECK(mod.game_version == "1.2.0");
   REQUIRE(mod.platforms.size() == 2);
-  CHECK(mod.platforms[0] == "windows-x64");
+  CHECK(mod.platforms[0] == "win-amd64");
   CHECK(mod.requires_mods.empty());
 }
 
