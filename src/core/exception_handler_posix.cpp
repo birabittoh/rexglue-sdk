@@ -417,6 +417,38 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
       return;
     }
   }
+
+  // Nobody claimed it. Returning would retry the faulting instruction forever,
+  // leaving the thread spinning on a fault instead of dying, so hand the signal
+  // to whatever was installed before us or let the default kill the process.
+  struct sigaction* original = nullptr;
+  switch (signal_number) {
+    case SIGILL:
+      original = &original_sigill_handler_;
+      break;
+    case SIGSEGV:
+      original = &original_sigsegv_handler_;
+      break;
+#if REX_PLATFORM_MAC
+    case SIGBUS:
+      original = &original_sigbus_handler_;
+      break;
+#endif
+    default:
+      break;
+  }
+  if (original && (original->sa_flags & SA_SIGINFO) && original->sa_sigaction) {
+    original->sa_sigaction(signal_number, signal_info, signal_context);
+    return;
+  }
+  if (original && original->sa_handler != SIG_DFL && original->sa_handler != SIG_IGN) {
+    original->sa_handler(signal_number);
+    return;
+  }
+  struct sigaction fallback = {};
+  fallback.sa_handler = SIG_DFL;
+  sigemptyset(&fallback.sa_mask);
+  sigaction(signal_number, &fallback, nullptr);
 }
 
 void ExceptionHandler::Install(Handler fn, void* data) {
