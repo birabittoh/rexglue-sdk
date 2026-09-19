@@ -98,12 +98,15 @@ void MergeShippedToml(const std::filesystem::path& install_root,
 
 // The release asset's extension per platform. macOS ships a .dmg rather than
 // a tarball because the .app has to carry a working code signature, and the
-// SDK's own tar reader drops symlinks and permission bits.
+// SDK's own tar reader drops symlinks and permission bits. Android ships the
+// signed APK itself, handed to the system installer as is.
 std::string_view AssetExtension() {
 #if REX_PLATFORM_WIN32
   return ".zip";
 #elif REX_PLATFORM_MAC
   return ".dmg";
+#elif REX_PLATFORM_ANDROID
+  return ".apk";
 #else
   return ".tar.gz";
 #endif
@@ -136,7 +139,7 @@ std::filesystem::path AutoUpdater::InstallRoot() {
 bool AutoUpdater::SupportsSelfUpdate() {
   // Kept in lockstep with src/system/CMakeLists.txt, which only builds an
   // ApplyAndRestart for these platforms.
-  return REX_PLATFORM_WIN32 || REX_PLATFORM_MAC || REX_PLATFORM_GNU_LINUX;
+  return REX_PLATFORM_WIN32 || REX_PLATFORM_MAC || REX_PLATFORM_GNU_LINUX || REX_PLATFORM_ANDROID;
 }
 
 std::string AutoUpdater::ExpandAssetFormat(const std::string& format, const std::string& tag) {
@@ -263,11 +266,42 @@ bool AutoUpdater::HasPendingSelfUpdate(const std::filesystem::path& install_root
   if (!std::filesystem::is_directory(staging, ec)) {
     return false;
   }
+#if REX_PLATFORM_ANDROID
+  // The system installer applies the APK, so nothing here ever clears the
+  // staging dir. Once the running build is at least the staged version, the
+  // file is stale (installed, or the user updated another way): drop it.
+  auto* runtime = rex::Runtime::instance();
+  std::string current = runtime ? runtime->game_version() : std::string();
+  if (!current.empty()) {
+    auto staged = StagedApkPath(install_root);
+    if (staged.empty() || CompareVersionStrings(current, StagedApkVersion(staged)) >= 0) {
+      std::filesystem::remove_all(staging, ec);
+      return false;
+    }
+  }
+#endif
   for (auto& entry : std::filesystem::directory_iterator(staging, ec)) {
     (void)entry;
     return true;
   }
   return false;
+}
+
+std::filesystem::path AutoUpdater::StagedApkPath(const std::filesystem::path& install_root) {
+  std::error_code ec;
+  for (auto& entry : std::filesystem::directory_iterator(StagingRoot(install_root), ec)) {
+    if (entry.path().extension() == ".apk") {
+      return entry.path();
+    }
+  }
+  return {};
+}
+
+std::string AutoUpdater::StagedApkVersion(const std::filesystem::path& apk) {
+  // Staged as "update-<version>.apk" by InstallWorker.
+  std::string stem = apk.stem().string();
+  constexpr std::string_view kPrefix = "update-";
+  return stem.rfind(kPrefix, 0) == 0 ? stem.substr(kPrefix.size()) : std::string();
 }
 
 // ApplyAndRestart() is platform-specific; see auto_updater_win.cpp /
@@ -323,8 +357,11 @@ void AutoUpdater::InstallWorker(UpdateInfo info, std::filesystem::path install_r
   };
   bool is_tar_gz = ends_with(".tar.gz");
   bool is_dmg = ends_with(".dmg");
-  auto temp_archive =
-      temp_root / (is_tar_gz ? "download.tar.gz" : (is_dmg ? "download.dmg" : "download.zip"));
+  bool is_apk = ends_with(".apk");
+  auto temp_archive = temp_root / (is_tar_gz ? "download.tar.gz"
+                                   : is_dmg  ? "download.dmg"
+                                   : is_apk  ? "download.apk"
+                                             : "download.zip");
 
   std::string download_error;
   auto progress = [this](uint64_t downloaded, uint64_t total) {
@@ -354,6 +391,24 @@ void AutoUpdater::InstallWorker(UpdateInfo info, std::filesystem::path install_r
            "; the release asset may have changed. Refusing to install.");
       return;
     }
+  }
+
+  auto staging = AutoUpdater::StagingRoot(install_root);
+  if (is_apk) {
+    // Nothing to unpack: the installer takes the APK whole. The version in
+    // the name lets HasPendingSelfUpdate() tell a stale one apart later.
+    std::filesystem::remove_all(staging, ec);
+    std::filesystem::create_directories(staging, ec);
+    std::filesystem::rename(temp_archive, staging / ("update-" + info.version + ".apk"), ec);
+    std::error_code ignored;
+    std::filesystem::remove_all(temp_root, ignored);
+    std::lock_guard<std::mutex> lock(install_mutex_);
+    install_result_.in_progress = false;
+    install_result_.done = true;
+    install_result_.ok = !ec;
+    install_result_.message =
+        ec ? "failed to stage update: " + ec.message() : "Downloaded v" + info.version;
+    return;
   }
 
   auto extracted = temp_root / "extracted";
@@ -402,7 +457,6 @@ void AutoUpdater::InstallWorker(UpdateInfo info, std::filesystem::path install_r
   // to the user data root, not next to the executable.
   MergeShippedToml(install_root, content_root);
 
-  auto staging = AutoUpdater::StagingRoot(install_root);
   std::filesystem::remove_all(staging, ec);
   std::string stage_error;
   if (!rex::filesystem::MoveOrCopyDirectory(content_root, staging, stage_error)) {

@@ -64,10 +64,9 @@ class AutoUpdater {
  public:
   ~AutoUpdater();
 
-  // False on platforms where no ApplyAndRestart is built (Android, whose
-  // install is a signed APK the OS owns; updates go through the store), so a
-  // staged update could never be applied. Callers should skip the whole
-  // update UI when this is false; CheckAsync/InstallAsync also refuse.
+  // False on platforms where no ApplyAndRestart is built, so a staged update
+  // could never be applied. Callers should skip the whole update UI when
+  // this is false; CheckAsync/InstallAsync also refuse.
   static bool SupportsSelfUpdate();
 
   // Kicks off a background check against RuntimeConfig::update_repo's
@@ -117,8 +116,15 @@ class AutoUpdater {
   // <root>/.pending-self-update/nocturnerecomp.exe, .../rexruntime.dll, ...).
   static std::filesystem::path StagingRoot(const std::filesystem::path& install_root);
 
-  // True if a self-update is staged and waiting for ApplyAndRestart().
+  // True if a self-update is staged and waiting for ApplyAndRestart(). On
+  // Android a staged APK no newer than the running build is discarded here,
+  // since the system installer never clears the staging dir itself.
   static bool HasPendingSelfUpdate(const std::filesystem::path& install_root);
+
+  // The staged "update-<version>.apk" (empty if none) and the version its
+  // name carries. Android only in practice; pure path inspection.
+  static std::filesystem::path StagedApkPath(const std::filesystem::path& install_root);
+  static std::string StagedApkVersion(const std::filesystem::path& apk);
 
   // Spawns a detached helper (a temp script on both platforms; see
   // auto_updater_win.cpp/auto_updater_posix.cpp) that waits for this
@@ -132,6 +138,14 @@ class AutoUpdater {
   // case the caller must quit the app right after (e.g.
   // Window::RequestClose()); this process is expected to have exited by
   // the time the helper's wait loop moves on.
+  //
+  // Android instead hands the staged APK to the system package installer
+  // (auto_updater_android.cpp) and returns once that activity is up; the
+  // caller must NOT quit, the installer replaces the app by itself. The host
+  // app has to declare a FileProvider with authority
+  // "<applicationId>.fileprovider" whose paths cover StagingRoot(), request
+  // REQUEST_INSTALL_PACKAGES, and depend on androidx.core; `executable_path`
+  // is ignored.
   static bool ApplyAndRestart(const std::filesystem::path& install_root,
                               const std::filesystem::path& executable_path);
 

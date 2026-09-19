@@ -86,11 +86,11 @@ elseif(UNIX)
         target_sources(rexcore PRIVATE fiber_posix.cpp)
     endif()
     if(ANDROID)
-        # Android (Bionic) doesn't ship libcurl. Stub out the HTTP client; the
-        # mod catalog won't work on Android until a Java/JNI HTTP backend is
-        # added. Android's Bionic bundles librt into libc, so no separate -lrt.
-        target_sources(rexcore PRIVATE net/http_stub.cpp)
-        target_link_libraries(rexcore PRIVATE log)
+        # Android (Bionic) doesn't ship libcurl; the HTTP client goes through
+        # java.net.HttpURLConnection over SDL's JNI env instead. Android's
+        # Bionic bundles librt into libc, so no separate -lrt.
+        target_sources(rexcore PRIVATE net/http_android.cpp)
+        target_link_libraries(rexcore PRIVATE log SDL3::SDL3)
     else()
         target_sources(rexcore PRIVATE net/http_curl.cpp)
         # Linked directly (not vendored) per the mod-catalog HTTP client design:

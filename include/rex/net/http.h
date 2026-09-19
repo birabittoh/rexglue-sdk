@@ -8,7 +8,9 @@
  * @license     BSD 3-Clause License
  *              See LICENSE file in the project root for full license text.
  *
- * @remarks     Windows implementation uses WinHTTP (src/core/net/http_win.cpp);
+ * @remarks     Windows implementation uses WinHTTP (src/core/net/http_win.cpp),
+ *              Android uses java.net.HttpURLConnection over JNI
+ *              (src/core/net/http_android.cpp);
  *              Linux (amd64 + arm64) links libcurl directly
  *              (src/core/net/http_curl.cpp), via find_package(CURL REQUIRED)
  *              so a Linux build fails fast rather than silently shipping
