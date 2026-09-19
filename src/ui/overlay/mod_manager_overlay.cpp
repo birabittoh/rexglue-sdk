@@ -351,8 +351,12 @@ void ModManagerDialog::DrawRestartBanner() {
   ImGui::PopStyleColor();
   ImGui::SameLine();
   if (ImGui::SmallButton(has_pending_updates_ ? "Restart & Apply" : "Restart Now")) {
+    // This draws on the guest thread. RequestClose runs OnClosing inline,
+    // whose TerminateTitle then self-terminates the calling guest thread
+    // before the hard exit, leaving the old process alive.
     if (rex::platform::process::Relaunch() && window_) {
-      window_->RequestClose();
+      auto* window = window_;
+      window->app_context().CallInUIThread([window] { window->RequestClose(); });
     }
   }
   ImGui::Separator();
