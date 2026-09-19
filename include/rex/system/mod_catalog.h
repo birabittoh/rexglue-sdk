@@ -16,8 +16,11 @@
  *              RuntimeConfig::catalog_name. Clearing the cvars/catalog_name
  *              disables the catalog exactly like a network failure would:
  *              state settles at kFailed, and the overlay simply omits the
- *              "All" tab. Nothing here ever throws or blocks the UI thread --
- *              FetchAsync/InstallAsync run on a worker std::thread (mirroring
+ *              "All" tab. mod_catalog_fallback_url names a plain JSON
+ *              catalog (see ParseFallbackCatalog) that is fetched instead
+ *              whenever the Firestore query fails or is disabled, so a rate
+ *              limited backend degrades to a static mirror, not to no tab. Nothing here ever throws
+ * or blocks the UI thread -- FetchAsync/InstallAsync run on a worker std::thread (mirroring
  *              src/discord/discord_rpc.cpp's pattern; there's no thread
  *              pool), publishing into a mutex-guarded result the UI thread
  *              polls once per frame.
@@ -40,6 +43,7 @@ REXCVAR_DECLARE(std::string, mod_catalog_api_key);
 REXCVAR_DECLARE(std::string, mod_catalog_url);
 REXCVAR_DECLARE(std::string, mod_catalog_games_collection);
 REXCVAR_DECLARE(std::string, mod_catalog_mods_collection);
+REXCVAR_DECLARE(std::string, mod_catalog_fallback_url);
 
 namespace rex::system {
 
@@ -91,8 +95,8 @@ class ModCatalog {
   // mod_catalog_* cvars and RuntimeConfig::catalog_name (via
   // rex::Runtime::instance()) at call time, so changing them and calling
   // Refresh() re-queries live. If `catalog_name` is empty, or both
-  // mod_catalog_project and mod_catalog_url are empty, settles straight to
-  // kFailed without any network I/O.
+  // mod_catalog_project, mod_catalog_url and mod_catalog_fallback_url are
+  // empty, settles straight to kFailed without any network I/O.
   void Refresh();
 
   CatalogState state() const { return state_.load(std::memory_order_acquire); }
@@ -118,7 +122,11 @@ class ModCatalog {
 
  private:
   void FetchWorker(std::string catalog_name, std::string query_url, std::string games_collection,
-                   std::string mods_collection);
+                   std::string mods_collection, std::string fallback_url);
+  bool FetchPrimary(const std::string& catalog_name, const std::string& query_url,
+                    const std::string& games_collection, const std::string& mods_collection,
+                    std::vector<CatalogMod>& out_mods);
+  bool FetchFallback(const std::string& fallback_url, std::vector<CatalogMod>& out_mods);
   void InstallWorker(CatalogMod entry, std::filesystem::path mods_root);
   // Downloads+verifies+extracts+installs exactly one mod into mods_root and
   // records/refreshes its mods.toml entry. Shared by InstallWorker for both
@@ -152,6 +160,14 @@ class ModCatalog {
 // no "document" key; the no-match shape is a one-element array with only
 // "readTime"). Exposed for unit testing against canned fixtures.
 std::vector<CatalogMod> ParseModsResponse(const std::string& json_body);
+
+// Parses a plain JSON catalog (mod_catalog_fallback_url): either an array of
+// mod objects or {"mods": [...]}, each object carrying the same camelCase
+// keys as a Firestore CatalogMod document but as plain JSON values
+// ("platform" and "requires" are string arrays). "status" defaults to
+// "approved"; anything not approved/featured is dropped. Exposed for unit
+// testing.
+std::vector<CatalogMod> ParseFallbackCatalog(const std::string& json_body);
 
 // Parses a games-collection runQuery response and returns the gameId (the
 // last path segment of the first result's document.name), or empty if there

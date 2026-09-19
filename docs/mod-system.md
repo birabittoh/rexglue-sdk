@@ -300,9 +300,16 @@ read/write UI over everything above:
     `mod_catalog_project`/`mod_catalog_url` disables the catalog exactly like
     a network failure would: the tab is simply omitted, nothing throws, and
     the "Installed" tab keeps working.
-  - Any failure (DNS, TLS, HTTP error, malformed JSON) leaves
-    `ModCatalog` in a `kFailed` state with the same "no tab, no crash"
-    behavior.
+  - `mod_catalog_fallback_url` names a plain JSON catalog fetched with a
+    GET whenever the Firestore query fails (rate limit, outage) or is
+    disabled: either an array of mod objects or `{"mods": [...]}`, each
+    object carrying the Firestore document's camelCase keys (`modId`,
+    `name`, `author`, `description`, `version`, `gameVersion`, `assetUrl`,
+    `checksum`, `platform`, `requires`, `iconUrl`, `status`) as plain JSON
+    values. A static file on raw.githubusercontent.com is enough.
+  - Any failure (DNS, TLS, HTTP error, malformed JSON) of both the primary
+    and the fallback leaves `ModCatalog` in a `kFailed` state with the same
+    "no tab, no crash" behavior.
   - Installing verifies the downloaded asset's SHA-256 against the
     catalog's `checksum` and **hard-refuses on mismatch**, never
     extracting a payload that doesn't match what was approved.

@@ -15,6 +15,7 @@
 
 #include <rex/system/mod_catalog.h>
 
+using rex::system::ParseFallbackCatalog;
 using rex::system::ParseGameIdResponse;
 using rex::system::ParseModsResponse;
 
@@ -102,4 +103,49 @@ TEST_CASE("ModCatalog: ParseModsResponse sorts featured mods first, then alphabe
 
 TEST_CASE("ModCatalog: ParseModsResponse never throws on malformed JSON", "[mod_catalog]") {
   CHECK(ParseModsResponse("{{{not json").empty());
+}
+
+TEST_CASE("ModCatalog: ParseFallbackCatalog reads plain JSON under a 'mods' key", "[mod_catalog]") {
+  std::string body = R"({"mods": [{
+    "modId": "party_overlay", "name": "Party Overlay", "author": "someone",
+    "description": "d", "version": "1.2.0", "gameVersion": "1.2.0",
+    "assetUrl": "https://example.com/party_overlay-v1.2.0.zip", "checksum": "abc",
+    "platform": ["win-amd64", "android-arm64"], "requires": ["other >= 1.0"],
+    "iconUrl": "https://example.com/icon.png", "status": "featured"}]})";
+  auto mods = ParseFallbackCatalog(body);
+  REQUIRE(mods.size() == 1);
+  const auto& mod = mods[0];
+  CHECK(mod.mod_id == "party_overlay");
+  CHECK(mod.name == "Party Overlay");
+  CHECK(mod.version == "1.2.0");
+  CHECK(mod.asset_url == "https://example.com/party_overlay-v1.2.0.zip");
+  CHECK(mod.checksum == "abc");
+  REQUIRE(mod.platforms.size() == 2);
+  CHECK(mod.platforms[1] == "android-arm64");
+  REQUIRE(mod.requires_mods.size() == 1);
+  CHECK(mod.requires_mods[0] == "other >= 1.0");
+  CHECK(mod.icon_url == "https://example.com/icon.png");
+  CHECK(mod.status == "featured");
+}
+
+TEST_CASE(
+    "ModCatalog: ParseFallbackCatalog accepts a bare array, defaults status and drops "
+    "unpublished entries",
+    "[mod_catalog]") {
+  std::string body = R"([
+    {"modId": "b", "name": "B"},
+    {"modId": "a", "name": "A", "status": "featured"},
+    {"modId": "hidden", "name": "Hidden", "status": "rejected"},
+    {"name": "no id"}])";
+  auto mods = ParseFallbackCatalog(body);
+  REQUIRE(mods.size() == 2);
+  CHECK(mods[0].mod_id == "a");
+  CHECK(mods[1].mod_id == "b");
+  CHECK(mods[1].status == "approved");
+}
+
+TEST_CASE("ModCatalog: ParseFallbackCatalog never throws on malformed JSON", "[mod_catalog]") {
+  CHECK(ParseFallbackCatalog("{").empty());
+  CHECK(ParseFallbackCatalog("{\"mods\": 3}").empty());
+  CHECK(ParseFallbackCatalog("42").empty());
 }

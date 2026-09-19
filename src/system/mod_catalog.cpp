@@ -39,6 +39,9 @@ REXCVAR_DEFINE_STRING(mod_catalog_games_collection, "games", "Mods",
                       "Firestore collection queried to resolve catalog_name -> gameId");
 REXCVAR_DEFINE_STRING(mod_catalog_mods_collection, "mods", "Mods",
                       "Firestore collection queried for a resolved gameId's mods");
+REXCVAR_DEFINE_STRING(mod_catalog_fallback_url, "", "Mods",
+                      "Plain JSON catalog fetched with GET when the Firestore query fails (rate "
+                      "limit, outage) or is disabled; see ParseFallbackCatalog for the shape");
 
 namespace rex::system {
 
@@ -122,6 +125,38 @@ std::string ModsForGameQueryBody(std::string_view collection, std::string_view g
   query["structuredQuery"]["where"]["compositeFilter"]["filters"] =
       json::array({game_filter, status_filter});
   return query.dump();
+}
+
+std::string PlainString(const json& obj, const char* key) {
+  auto it = obj.find(key);
+  return it != obj.end() && it->is_string() ? it->get<std::string>() : std::string();
+}
+
+std::vector<std::string> PlainStringArray(const json& obj, const char* key) {
+  std::vector<std::string> out;
+  auto it = obj.find(key);
+  if (it == obj.end() || !it->is_array()) {
+    return out;
+  }
+  for (const auto& element : *it) {
+    if (element.is_string() && !element.get<std::string>().empty()) {
+      out.push_back(element.get<std::string>());
+    }
+  }
+  return out;
+}
+
+void SortCatalog(std::vector<CatalogMod>& mods) {
+  // Featured first, then approved, then alphabetical; see mod_manager
+  // overlay's "All" tab ordering.
+  std::stable_sort(mods.begin(), mods.end(), [](const CatalogMod& a, const CatalogMod& b) {
+    bool a_featured = a.status == "featured";
+    bool b_featured = b.status == "featured";
+    if (a_featured != b_featured) {
+      return a_featured;
+    }
+    return a.name < b.name;
+  });
 }
 
 // Best-effort read of an installed mod's `version` key, for comparing
@@ -208,16 +243,56 @@ std::vector<CatalogMod> ParseModsResponse(const std::string& json_body) {
     return {};
   }
 
-  // Featured first, then approved, then alphabetical; see mod_manager
-  // overlay's "All" tab ordering.
-  std::stable_sort(mods.begin(), mods.end(), [](const CatalogMod& a, const CatalogMod& b) {
-    bool a_featured = a.status == "featured";
-    bool b_featured = b.status == "featured";
-    if (a_featured != b_featured) {
-      return a_featured;
+  SortCatalog(mods);
+  return mods;
+}
+
+std::vector<CatalogMod> ParseFallbackCatalog(const std::string& json_body) {
+  std::vector<CatalogMod> mods;
+  try {
+    json parsed = json::parse(json_body);
+    const json* rows = &parsed;
+    if (parsed.is_object()) {
+      auto it = parsed.find("mods");
+      if (it == parsed.end()) {
+        return mods;
+      }
+      rows = &*it;
     }
-    return a.name < b.name;
-  });
+    if (!rows->is_array()) {
+      return mods;
+    }
+    for (const auto& row : *rows) {
+      if (!row.is_object()) {
+        continue;
+      }
+      CatalogMod mod;
+      mod.mod_id = PlainString(row, "modId");
+      mod.name = PlainString(row, "name");
+      mod.author = PlainString(row, "author");
+      mod.description = PlainString(row, "description");
+      mod.version = PlainString(row, "version");
+      mod.asset_url = PlainString(row, "assetUrl");
+      mod.checksum = PlainString(row, "checksum");
+      mod.platforms = PlainStringArray(row, "platform");
+      mod.requires_mods = PlainStringArray(row, "requires");
+      mod.game_version = PlainString(row, "gameVersion");
+      mod.icon_url = PlainString(row, "iconUrl");
+      mod.status = PlainString(row, "status");
+      if (mod.status.empty()) {
+        mod.status = "approved";
+      }
+      // Same visibility rule the Firestore query applies server side.
+      if (mod.mod_id.empty() || (mod.status != "approved" && mod.status != "featured")) {
+        continue;
+      }
+      mods.push_back(std::move(mod));
+    }
+  } catch (const json::exception& e) {
+    REXSYS_WARN("ModCatalog: failed to parse fallback catalog: {}", e.what());
+    return {};
+  }
+  SortCatalog(mods);
   return mods;
 }
 
@@ -260,8 +335,9 @@ void ModCatalog::Refresh() {
   std::string query_url = EffectiveQueryUrl();
   std::string games_collection = REXCVAR_GET(mod_catalog_games_collection);
   std::string mods_collection = REXCVAR_GET(mod_catalog_mods_collection);
+  std::string fallback_url = REXCVAR_GET(mod_catalog_fallback_url);
 
-  if (catalog_name.empty() || query_url.empty()) {
+  if (catalog_name.empty() || (query_url.empty() && fallback_url.empty())) {
     // Disabled by config: settle straight to kFailed, no request attempted.
     // Indistinguishable from a network failure to the overlay, by design.
     state_.store(CatalogState::kFailed, std::memory_order_release);
@@ -270,29 +346,30 @@ void ModCatalog::Refresh() {
   }
 
   state_.store(CatalogState::kLoading, std::memory_order_release);
-  fetch_thread_ = std::thread([this, catalog_name, query_url, games_collection, mods_collection] {
-    FetchWorker(catalog_name, query_url, games_collection, mods_collection);
-    fetch_in_flight_.store(false, std::memory_order_release);
-  });
+  fetch_thread_ =
+      std::thread([this, catalog_name, query_url, games_collection, mods_collection, fallback_url] {
+        FetchWorker(catalog_name, query_url, games_collection, mods_collection, fallback_url);
+        fetch_in_flight_.store(false, std::memory_order_release);
+      });
 }
 
-void ModCatalog::FetchWorker(std::string catalog_name, std::string query_url,
-                             std::string games_collection, std::string mods_collection) {
+bool ModCatalog::FetchPrimary(const std::string& catalog_name, const std::string& query_url,
+                              const std::string& games_collection,
+                              const std::string& mods_collection,
+                              std::vector<CatalogMod>& out_mods) {
   auto game_query = StructuredQueryEqualsBody(games_collection, "recompName", catalog_name);
   auto game_response = rex::net::HttpPostJson(query_url, game_query, &fetch_cancel_);
   if (!game_response.ok()) {
     REXSYS_WARN("ModCatalog: game lookup failed: {}", game_response.error.empty()
                                                           ? std::to_string(game_response.status)
                                                           : game_response.error);
-    state_.store(CatalogState::kFailed, std::memory_order_release);
-    return;
+    return false;
   }
 
   std::string game_id = ParseGameIdResponse(game_response.body);
   if (game_id.empty()) {
     REXSYS_WARN("ModCatalog: no catalog game found for catalog_name '{}'", catalog_name);
-    state_.store(CatalogState::kFailed, std::memory_order_release);
-    return;
+    return false;
   }
 
   auto mods_query = ModsForGameQueryBody(mods_collection, game_id);
@@ -301,11 +378,38 @@ void ModCatalog::FetchWorker(std::string catalog_name, std::string query_url,
     REXSYS_WARN("ModCatalog: mods query failed: {}", mods_response.error.empty()
                                                          ? std::to_string(mods_response.status)
                                                          : mods_response.error);
+    return false;
+  }
+
+  out_mods = ParseModsResponse(mods_response.body);
+  return true;
+}
+
+bool ModCatalog::FetchFallback(const std::string& fallback_url, std::vector<CatalogMod>& out_mods) {
+  auto response = rex::net::HttpGet(fallback_url, {}, &fetch_cancel_);
+  if (!response.ok()) {
+    REXSYS_WARN("ModCatalog: fallback catalog fetch failed: {}",
+                response.error.empty() ? std::to_string(response.status) : response.error);
+    return false;
+  }
+  out_mods = ParseFallbackCatalog(response.body);
+  return true;
+}
+
+void ModCatalog::FetchWorker(std::string catalog_name, std::string query_url,
+                             std::string games_collection, std::string mods_collection,
+                             std::string fallback_url) {
+  std::vector<CatalogMod> mods;
+  bool ok = !query_url.empty() &&
+            FetchPrimary(catalog_name, query_url, games_collection, mods_collection, mods);
+  if (!ok && !fallback_url.empty() && !fetch_cancel_.cancelled()) {
+    REXSYS_INFO("ModCatalog: using fallback catalog {}", fallback_url);
+    ok = FetchFallback(fallback_url, mods);
+  }
+  if (!ok) {
     state_.store(CatalogState::kFailed, std::memory_order_release);
     return;
   }
-
-  auto mods = ParseModsResponse(mods_response.body);
   {
     std::lock_guard<std::mutex> lock(mods_mutex_);
     mods_ = std::move(mods);
