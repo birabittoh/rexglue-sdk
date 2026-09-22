@@ -9,6 +9,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <thread>
@@ -25,6 +26,12 @@ REXCVAR_DEFINE_STRING(hid_mappings_file, "gamecontrollerdb.txt", "Input",
                       "Path to SDL gamecontroller mappings file");
 REXCVAR_DEFINE_BOOL(hid_background_input, true, "Input",
                     "Keep accepting controller input while the window is unfocused");
+REXCVAR_DEFINE_BOOL(gyro_aim, false, "Input", "Add the gyroscope to a thumbstick's input");
+REXCVAR_DEFINE_BOOL(gyro_left_stick, false, "Input",
+                    "Drive the left stick with the gyro aiming instead of the right");
+REXCVAR_DEFINE_DOUBLE(gyro_sensitivity, 1.0, "Input", "Gyro aiming sensitivity").range(0.01, 10.0);
+REXCVAR_DEFINE_BOOL(gyro_invert_x, false, "Input", "Invert the gyro's horizontal axis");
+REXCVAR_DEFINE_BOOL(gyro_invert_y, false, "Input", "Invert the gyro's vertical axis");
 
 namespace rex::input::sdl {
 
@@ -32,6 +39,29 @@ namespace {
 
 // SDL clamps to SDL_MAX_RUMBLE_DURATION_MS, which is not a public constant.
 constexpr uint32_t kRumbleDurationMs = 0xFFFF;
+
+// The gyro drives stick deflection from angular velocity.
+constexpr float kGyroFullScaleRadPerSec = 4.0f;
+
+// Ignore noise below this threshold
+constexpr float kGyroDeadzoneRadPerSec = 0.04f;
+
+int16_t GyroAxisToStick(float rad_per_sec, double sensitivity, bool invert) {
+  if (rad_per_sec > -kGyroDeadzoneRadPerSec && rad_per_sec < kGyroDeadzoneRadPerSec) {
+    return 0;
+  }
+  if (invert) {
+    rad_per_sec = -rad_per_sec;
+  }
+  const double scaled = double(rad_per_sec) * sensitivity * 32767.0 / kGyroFullScaleRadPerSec;
+  return static_cast<int16_t>(std::clamp(scaled, -32767.0, 32767.0));
+}
+
+// Saturating, so a gyro flick on top of a pushed stick cannot wrap the axis.
+int16_t AddStick(int16_t base, int16_t delta) {
+  return static_cast<int16_t>(
+      std::clamp(int32_t(base) + int32_t(delta), int32_t(-32767), int32_t(32767)));
+}
 
 }  // namespace
 
@@ -228,6 +258,24 @@ X_RESULT SDLInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
     controller->state_changed = false;
   }
   std::memcpy(out_state, &controller->state, sizeof(*out_state));
+
+  // Mixed with the deflection from the physical stick
+  if (is_active && controller->gyro_enabled && REXCVAR_GET(gyro_aim)) {
+    const double sensitivity = REXCVAR_GET(gyro_sensitivity);
+    const int16_t gyro_x =
+        GyroAxisToStick(-controller->gyro[1], sensitivity, REXCVAR_GET(gyro_invert_x));
+    const int16_t gyro_y =
+        GyroAxisToStick(controller->gyro[0], sensitivity, REXCVAR_GET(gyro_invert_y));
+    if (gyro_x || gyro_y) {
+      const bool left = REXCVAR_GET(gyro_left_stick);
+      auto& out_x = left ? out_state->gamepad.thumb_lx : out_state->gamepad.thumb_rx;
+      auto& out_y = left ? out_state->gamepad.thumb_ly : out_state->gamepad.thumb_ry;
+      out_x = AddStick(out_x, gyro_x);
+      out_y = AddStick(out_y, gyro_y);
+      out_state->packet_number = ++controller->state.packet_number;
+    }
+  }
+
   if (!is_active) {
     // Simulate an "untouched" controller. When we become active again the
     // pressed buttons aren't lost and will be visible again.
@@ -453,6 +501,9 @@ void SDLInputDriver::ProcessEventLocked(const SDL_Event& event) {
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
       OnControllerDeviceButtonChangedLocked(event);
       break;
+    case SDL_EVENT_GAMEPAD_SENSOR_UPDATE:
+      OnControllerDeviceSensorUpdateLocked(event);
+      break;
     default:
       break;
   }
@@ -474,6 +525,10 @@ void SDLInputDriver::OnControllerDeviceAddedLocked(const SDL_Event& event) {
   pending_opens_.insert(instance_id);
   std::thread([this, instance_id]() {
     SDL_Gamepad* controller = SDL_OpenGamepad(instance_id);
+    // Enabling the sensor is a blocking HID feature report on some pads
+    if (controller && SDL_GamepadHasSensor(controller, SDL_SENSOR_GYRO)) {
+      SDL_SetGamepadSensorEnabled(controller, SDL_SENSOR_GYRO, true);
+    }
     OnControllerOpenedAsync(instance_id, controller);
   }).detach();
 }
@@ -510,6 +565,7 @@ void SDLInputDriver::OnControllerOpenedAsync(SDL_JoystickID instance_id, SDL_Gam
   // order and leaves non-XInput pads unnumbered.
   ControllerState state = {};
   state.sdl = controller;
+  state.gyro_enabled = SDL_GamepadSensorEnabled(controller, SDL_SENSOR_GYRO);
   state.id = AllocateDeviceId();
   state.state_changed = true;  // XInput starts with packet_number = 1
   UpdateXCapabilities(state);
@@ -589,6 +645,18 @@ void SDLInputDriver::OnControllerDeviceAxisMotionLocked(const SDL_Event& event) 
       break;
   }
   controllers_.at(*idx).state_changed = true;
+}
+
+void SDLInputDriver::OnControllerDeviceSensorUpdateLocked(const SDL_Event& event) {
+  if (event.gsensor.sensor != SDL_SENSOR_GYRO) {
+    return;
+  }
+  auto idx = GetControllerIndexFromInstanceID(event.gsensor.which);
+  if (!idx) {
+    return;
+  }
+  auto& controller = controllers_.at(*idx);
+  std::memcpy(controller.gyro, event.gsensor.data, sizeof(controller.gyro));
 }
 
 void SDLInputDriver::OnControllerDeviceButtonChangedLocked(const SDL_Event& event) {

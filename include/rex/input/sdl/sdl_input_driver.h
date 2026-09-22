@@ -71,6 +71,9 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
     DeviceId id;
     // Per pad rather than per guest user, so it survives reassignment.
     KeystrokeState keystroke;
+    // Latest gyro sample, rad/s, in SDL's pad space (x pitch, y yaw, z roll).
+    float gyro[3];
+    bool gyro_enabled;
   };
 
   // WindowListener
@@ -86,6 +89,7 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   void OnControllerDeviceRemovedLocked(const SDL_Event& event);
   void OnControllerDeviceAxisMotionLocked(const SDL_Event& event);
   void OnControllerDeviceButtonChangedLocked(const SDL_Event& event);
+  void OnControllerDeviceSensorUpdateLocked(const SDL_Event& event);
 
   inline uint64_t AnalogToKeyfield(const X_INPUT_GAMEPAD& gamepad) const;
   std::optional<size_t> GetControllerIndexFromInstanceID(SDL_JoystickID instance_id);
