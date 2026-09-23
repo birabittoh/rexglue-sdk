@@ -6,18 +6,11 @@
 #include <string>
 #include <string_view>
 
+#include <rex/ui/progress_window.h>
+
 namespace rex::system {
 
-/// Colors for the progress window shown during extraction, as {R, G, B}
-/// bytes. Defaults match the SDK's own neutral dark theme; a guest app can
-/// retheme it to match its own overlay without touching SDL directly.
-struct ProgressWindowTheme {
-  uint8_t background[3] = {18, 18, 22};
-  uint8_t bar_fill[3] = {90, 160, 240};
-  uint8_t bar_frame[3] = {90, 90, 100};
-  uint8_t title_text[3] = {230, 230, 235};
-  uint8_t detail_text[3] = {150, 150, 160};
-};
+using ProgressWindowTheme = rex::ui::ProgressWindowTheme;
 
 /// Configuration for GameDataSelector, set by the guest application.
 struct GameDataSelectorSettings {

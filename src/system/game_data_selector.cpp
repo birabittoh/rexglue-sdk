@@ -30,7 +30,7 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
-#include <rex/ui/image_decode.h>
+#include <rex/ui/progress_window.h>
 
 #if REX_PLATFORM_ANDROID
 #include <rex/platform.h>
@@ -125,7 +125,7 @@ std::vector<std::filesystem::path> GetPreExtractedCandidates() {
 // Progress feedback for the long-running steps
 // =============================================================================
 
-/// Theme and icon for ProgressWindow, set once from GameDataSelectorSettings
+/// Theme and icon for the progress window, set once from GameDataSelectorSettings
 /// at the top of EnsureGameDataImpl. A global rather than a parameter thread
 /// through ExtractIsoTo/ExtractXblaTo/ExtractTitleUpdateTo: those construct
 /// their own ProgressReporter deep in extraction and have no other reason to
@@ -133,178 +133,6 @@ std::vector<std::filesystem::path> GetPreExtractedCandidates() {
 ProgressWindowTheme g_progress_theme;
 const void* g_progress_icon_data = nullptr;
 size_t g_progress_icon_size = 0;
-
-/// A throwaway window with a progress bar, for the phase before the app has a
-/// window of its own.
-///
-/// Extraction runs inside SetupEnvironment on every platform, well before
-/// SetupPresentation creates the real window and the ImGui context, so there is
-/// nothing to draw into: the choice is between a black screen for a minute and
-/// bringing up a window here. This one is created when the long step starts and
-/// destroyed when it ends, so the game's own window creation is unaffected (on
-/// Android that matters: SDL allows a single window, and SDL_DestroyWindow
-/// releases the activity's surface for the presenter that comes next).
-///
-/// Everything degrades gracefully: if the window or renderer cannot be created,
-/// ok() is false and the caller falls back to logging progress only.
-class ProgressWindow {
- public:
-  ProgressWindow() {
-    if (!SDL_WasInit(SDL_INIT_VIDEO)) {
-      // Normally the windowed-app context already owns the video subsystem;
-      // only claim it when nothing has (a consumer driving the selector on its
-      // own), and hand it back in the destructor.
-      if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
-        REXLOG_WARN("Progress window: SDL_InitSubSystem(VIDEO) failed: {}", SDL_GetError());
-        return;
-      }
-      owns_video_ = true;
-    }
-
-    // The size is a hint only: Android ignores it and fills the screen.
-    window_ = SDL_CreateWindow("Preparing game files", 560, 180, 0);
-    if (!window_) {
-      REXLOG_WARN("Progress window: SDL_CreateWindow failed: {}", SDL_GetError());
-      return;
-    }
-    renderer_ = SDL_CreateRenderer(window_, nullptr);
-    if (!renderer_) {
-      REXLOG_WARN("Progress window: SDL_CreateRenderer failed: {}", SDL_GetError());
-      SDL_DestroyWindow(window_);
-      window_ = nullptr;
-      return;
-    }
-    REXLOG_INFO("Progress window up, using the '{}' render backend",
-                SDL_GetRendererName(renderer_));
-
-    if (g_progress_icon_data && g_progress_icon_size) {
-      int icon_w = 0, icon_h = 0;
-      std::vector<uint8_t> rgba = rex::ui::DecodeImageRGBA(
-          static_cast<const uint8_t*>(g_progress_icon_data), g_progress_icon_size, icon_w, icon_h);
-      if (!rgba.empty()) {
-        SDL_Surface* surface =
-            SDL_CreateSurfaceFrom(icon_w, icon_h, SDL_PIXELFORMAT_RGBA32, rgba.data(), icon_w * 4);
-        if (surface) {
-          icon_texture_ = SDL_CreateTextureFromSurface(renderer_, surface);
-          SDL_DestroySurface(surface);
-          if (icon_texture_) {
-            SDL_SetTextureScaleMode(icon_texture_, SDL_SCALEMODE_LINEAR);
-          }
-        }
-      } else {
-        REXLOG_WARN("Progress window: failed to decode icon image");
-      }
-    }
-  }
-
-  ~ProgressWindow() {
-    if (icon_texture_) {
-      SDL_DestroyTexture(icon_texture_);
-    }
-    if (renderer_) {
-      SDL_DestroyRenderer(renderer_);
-    }
-    if (window_) {
-      SDL_DestroyWindow(window_);
-    }
-    if (owns_video_) {
-      SDL_QuitSubSystem(SDL_INIT_VIDEO);
-    }
-  }
-
-  ProgressWindow(const ProgressWindow&) = delete;
-  ProgressWindow& operator=(const ProgressWindow&) = delete;
-
-  bool ok() const { return renderer_ != nullptr; }
-
-  /// Draw one frame. `fraction` outside [0,1] means "total unknown", which
-  /// draws a block sweeping back and forth instead of a filling bar.
-  void Draw(const std::string& title, float fraction, const std::string& detail) {
-    if (!ok()) {
-      return;
-    }
-
-    // Events have to be drained or the window never paints, and on desktop the
-    // OS marks it unresponsive. Nothing here can act on them: aborting mid
-    // extraction would leave a half-written game directory behind, so a close
-    // request is only logged.
-    SDL_Event ev;
-    while (SDL_PollEvent(&ev)) {
-      if (ev.type == SDL_EVENT_QUIT || ev.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
-        REXLOG_INFO("Close requested while preparing game files; ignoring until the step finishes");
-      }
-    }
-
-    int out_w = 0, out_h = 0;
-    SDL_GetRenderOutputSize(renderer_, &out_w, &out_h);
-    if (out_w <= 0 || out_h <= 0) {
-      return;
-    }
-    // The debug font is 8 px tall, which is unreadable on a phone panel, so
-    // everything is drawn in logical units scaled up on big surfaces.
-    const float scale = std::max(1.0f, std::floor(static_cast<float>(out_h) / 220.0f));
-    SDL_SetRenderScale(renderer_, scale, scale);
-    const float w = static_cast<float>(out_w) / scale;
-    const float h = static_cast<float>(out_h) / scale;
-
-    const auto& bg = g_progress_theme.background;
-    const auto& fill = g_progress_theme.bar_fill;
-    const auto& frame_color = g_progress_theme.bar_frame;
-    const auto& title_color = g_progress_theme.title_text;
-    const auto& detail_color = g_progress_theme.detail_text;
-
-    SDL_SetRenderDrawColor(renderer_, bg[0], bg[1], bg[2], 255);
-    SDL_RenderClear(renderer_);
-
-    const float bar_w = std::min(w - 40.0f, 480.0f);
-    const float bar_x = (w - bar_w) / 2.0f;
-    const float bar_h = 18.0f;
-
-    // The icon sits above the bar and pushes it down to make room, rather
-    // than overlapping the vertical center used when there is no icon.
-    float bar_y = h / 2.0f - bar_h / 2.0f;
-    if (icon_texture_) {
-      const float icon_size = std::min(h * 0.35f, 96.0f);
-      bar_y = h / 2.0f - bar_h / 2.0f + icon_size * 0.5f + 18.0f;
-      const SDL_FRect icon_rect{(w - icon_size) / 2.0f, bar_y - icon_size - 44.0f, icon_size,
-                                icon_size};
-      SDL_RenderTexture(renderer_, icon_texture_, nullptr, &icon_rect);
-    }
-
-    SDL_SetRenderDrawColor(renderer_, title_color[0], title_color[1], title_color[2], 255);
-    SDL_RenderDebugText(renderer_, bar_x, bar_y - 26.0f, title.c_str());
-    if (!detail.empty()) {
-      SDL_SetRenderDrawColor(renderer_, detail_color[0], detail_color[1], detail_color[2], 255);
-      SDL_RenderDebugText(renderer_, bar_x, bar_y + bar_h + 12.0f, detail.c_str());
-    }
-
-    SDL_FRect frame{bar_x, bar_y, bar_w, bar_h};
-    SDL_SetRenderDrawColor(renderer_, frame_color[0], frame_color[1], frame_color[2], 255);
-    SDL_RenderRect(renderer_, &frame);
-
-    SDL_SetRenderDrawColor(renderer_, fill[0], fill[1], fill[2], 255);
-    if (fraction >= 0.0f && fraction <= 1.0f) {
-      SDL_FRect fill{bar_x + 2.0f, bar_y + 2.0f, (bar_w - 4.0f) * fraction, bar_h - 4.0f};
-      SDL_RenderFillRect(renderer_, &fill);
-    } else {
-      // Indeterminate: a block bouncing on a two second period.
-      const float block = (bar_w - 4.0f) * 0.25f;
-      const float t = static_cast<float>(SDL_GetTicks() % 2000) / 1000.0f;  // 0..2
-      const float travel = (bar_w - 4.0f) - block;
-      const float x = travel * (t <= 1.0f ? t : 2.0f - t);
-      SDL_FRect fill{bar_x + 2.0f + x, bar_y + 2.0f, block, bar_h - 4.0f};
-      SDL_RenderFillRect(renderer_, &fill);
-    }
-
-    SDL_RenderPresent(renderer_);
-  }
-
- private:
-  SDL_Window* window_ = nullptr;
-  SDL_Renderer* renderer_ = nullptr;
-  SDL_Texture* icon_texture_ = nullptr;
-  bool owns_video_ = false;
-};
 
 /// Progress for the steps that take a minute or more: disc/XBLA extraction and,
 /// on Android, copying the picked content:// URI into the app's storage.
@@ -390,7 +218,8 @@ class ProgressReporter {
     REXLOG_INFO("{}: {}", label_, Detail());
   }
 
-  ProgressWindow window_;
+  rex::ui::ProgressWindow window_{"Preparing game files", g_progress_theme, g_progress_icon_data,
+                                  g_progress_icon_size};
   std::string label_;
   uint64_t total_bytes_ = 0;
   uint64_t bytes_ = 0;

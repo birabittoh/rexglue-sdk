@@ -13,6 +13,7 @@ set(REXUI_CORE_SOURCES
     keybinds.cpp
     menu_item.cpp
     presenter.cpp
+    progress_window.cpp
     renderdoc_api.cpp
     sdl_virtual_key.cpp
     window.cpp
