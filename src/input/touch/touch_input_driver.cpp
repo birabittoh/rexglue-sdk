@@ -16,7 +16,13 @@
 #include <cstring>
 #include <utility>
 
+#include <SDL3/SDL_events.h>
+#include <SDL3/SDL_init.h>
+#include <SDL3/SDL_sensor.h>
+#include <SDL3/SDL_video.h>
+
 #include <rex/cvar.h>
+#include <rex/input/gyro.h>
 #include <rex/logging.h>
 #include <rex/platform.h>
 
@@ -47,6 +53,14 @@ constexpr float kStickDeadzone = 0.12f;
 // Fraction of a D-pad's radius around its centre that reports no direction, so
 // a thumb landing dead centre doesn't pick one at random.
 constexpr float kDpadDeadzone = 0.25f;
+
+// Per poll weight of a new accelerometer sample in the gravity estimate, enough
+// to shed hand shake without lagging a change of grip.
+constexpr float kGravitySmoothing = 0.1f;
+
+float Dot(const float* a, const float* b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
 
 bool HitTest(const TouchControl& c, float x, float y) {
   const float dx = x - c.cx;
@@ -168,9 +182,30 @@ TouchInputDriver::~TouchInputDriver() {
     attached_window_->RemoveInputListener(this);
     attached_window_ = nullptr;
   }
+  if (gyro_sensor_) {
+    SDL_CloseSensor(gyro_sensor_);
+  }
+  if (accel_sensor_) {
+    SDL_CloseSensor(accel_sensor_);
+  }
+  if (sensors_initialized_) {
+    SDL_QuitSubSystem(SDL_INIT_SENSOR);
+  }
 }
 
 X_STATUS TouchInputDriver::Setup() {
+  // The device itself is the controller, so its own gyro can aim. Skipped
+  // without touch controls, so desktops don't bring up a sensor backend for
+  // nothing; toggling them on takes effect after a restart.
+  if (REXCVAR_GET(touch_controls)) {
+    if (SDL_InitSubSystem(SDL_INIT_SENSOR)) {
+      sensors_initialized_ = true;
+      // Read by polling, so the event queue need not carry every sample.
+      SDL_SetEventEnabled(SDL_EVENT_SENSOR_UPDATE, false);
+    } else {
+      REXLOG_WARN("SDL_InitSubSystem(SDL_INIT_SENSOR) failed: {}", SDL_GetError());
+    }
+  }
   REXLOG_INFO("Touch input driver initialized");
   return X_STATUS_SUCCESS;
 }
@@ -445,6 +480,114 @@ X_RESULT TouchInputDriver::GetDeviceCapabilities(DeviceId id, uint32_t flags,
   return X_ERROR_SUCCESS;
 }
 
+void TouchInputDriver::UpdateDeviceSensors() {
+  if (!sensors_initialized_) {
+    return;
+  }
+  const bool want = REXCVAR_GET(gyro_aim);
+  if (!want) {
+    if (gyro_sensor_) {
+      SDL_CloseSensor(gyro_sensor_);
+      gyro_sensor_ = nullptr;
+    }
+    if (accel_sensor_) {
+      SDL_CloseSensor(accel_sensor_);
+      accel_sensor_ = nullptr;
+    }
+    gravity_valid_ = false;
+    return;
+  }
+  if (gyro_sensor_) {
+    return;
+  }
+  int count = 0;
+  SDL_SensorID* ids = SDL_GetSensors(&count);
+  if (!ids) {
+    return;
+  }
+  for (int i = 0; i < count; ++i) {
+    const SDL_SensorType type = SDL_GetSensorTypeForID(ids[i]);
+    if (type == SDL_SENSOR_GYRO && !gyro_sensor_) {
+      gyro_sensor_ = SDL_OpenSensor(ids[i]);
+    } else if (type == SDL_SENSOR_ACCEL && !accel_sensor_) {
+      accel_sensor_ = SDL_OpenSensor(ids[i]);
+    }
+  }
+  SDL_free(ids);
+  if (gyro_sensor_) {
+    REXLOG_INFO("Touch: gyro aiming with \"{}\"{}", SDL_GetSensorName(gyro_sensor_),
+                accel_sensor_ ? "" : " (no accelerometer)");
+  } else {
+    // Stay closed for good rather than enumerating again every poll.
+    REXLOG_INFO("Touch: no gyroscope, gyro aiming unavailable");
+    if (accel_sensor_) {
+      SDL_CloseSensor(accel_sensor_);
+      accel_sensor_ = nullptr;
+    }
+    SDL_QuitSubSystem(SDL_INIT_SENSOR);
+    sensors_initialized_ = false;
+  }
+}
+
+bool TouchInputDriver::ApplyDeviceGyro(X_INPUT_GAMEPAD* gamepad) {
+  UpdateDeviceSensors();
+  float gyro[3];
+  if (!gyro_sensor_ || !SDL_GetSensorData(gyro_sensor_, gyro, 3)) {
+    return false;
+  }
+
+  // Sensor axes are fixed to the device's natural orientation; find the
+  // screen's right and up axes in them for the current rotation.
+  const SDL_DisplayID display = SDL_GetPrimaryDisplay();
+  int rotation = 0;
+  switch (SDL_GetCurrentDisplayOrientation(display)) {
+    case SDL_ORIENTATION_LANDSCAPE:
+      rotation = 90;
+      break;
+    case SDL_ORIENTATION_PORTRAIT_FLIPPED:
+      rotation = 180;
+      break;
+    case SDL_ORIENTATION_LANDSCAPE_FLIPPED:
+      rotation = 270;
+      break;
+    default:
+      break;
+  }
+  // SDL counts orientation from portrait even on a landscape native tablet.
+  if (SDL_GetNaturalDisplayOrientation(display) == SDL_ORIENTATION_LANDSCAPE) {
+    rotation = (rotation + 270) % 360;
+  }
+  static constexpr float kAxes[4][2][3] = {
+      {{1, 0, 0}, {0, 1, 0}},    // 0: right +X, up +Y
+      {{0, -1, 0}, {1, 0, 0}},   // 90: right -Y, up +X
+      {{-1, 0, 0}, {0, -1, 0}},  // 180
+      {{0, 1, 0}, {-1, 0, 0}},   // 270
+  };
+  const float* right = kAxes[rotation / 90][0];
+  const float* up = kAxes[rotation / 90][1];
+
+  // Yaw is taken about gravity rather than a device axis, so turning reads
+  // the same whether the device is held upright, tilted back or lying flat.
+  float accel[3];
+  if (accel_sensor_ && SDL_GetSensorData(accel_sensor_, accel, 3) && Dot(accel, accel) > 1.0f) {
+    if (!gravity_valid_) {
+      std::copy(accel, accel + 3, gravity_);
+      gravity_valid_ = true;
+    } else {
+      for (int i = 0; i < 3; ++i) {
+        gravity_[i] += (accel[i] - gravity_[i]) * kGravitySmoothing;
+      }
+    }
+  }
+  float yaw;
+  if (gravity_valid_) {
+    yaw = Dot(gyro, gravity_) / std::sqrt(Dot(gravity_, gravity_));
+  } else {
+    yaw = Dot(gyro, up);
+  }
+  return ApplyGyroToGamepad(yaw, Dot(gyro, right), gamepad);
+}
+
 X_RESULT TouchInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
   if (!REXCVAR_GET(touch_controls) || id != kTouchDevice) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
@@ -507,6 +650,9 @@ X_RESULT TouchInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state)
     out_state->gamepad.thumb_ly = thumb[1];
     out_state->gamepad.thumb_rx = thumb[2];
     out_state->gamepad.thumb_ry = thumb[3];
+    if (is_active() && ApplyDeviceGyro(&out_state->gamepad)) {
+      out_state->packet_number = ++packet_number_;
+    }
   }
   return X_ERROR_SUCCESS;
 }

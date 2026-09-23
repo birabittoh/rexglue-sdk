@@ -23,6 +23,8 @@
 #include <unordered_map>
 #include <vector>
 
+struct SDL_Sensor;
+
 namespace rex::input::touch {
 
 /// Which analog trigger a control drives, if any.
@@ -218,6 +220,13 @@ class TouchInputDriver final : public InputDriver, public rex::ui::WindowInputLi
   // Lets go of one finger and forgets it. state_mutex_ must be held.
   void ReleaseFinger(FingerTargetMap::iterator it);
 
+  // Opens the device's own gyroscope and accelerometer while gyro aiming is
+  // on, and closes them while it is off. state_mutex_ must be held.
+  void UpdateDeviceSensors();
+
+  // Adds the device's gyro to the pad. state_mutex_ must be held.
+  bool ApplyDeviceGyro(X_INPUT_GAMEPAD* gamepad);
+
   // Live state of one stick, in surface pixels.
   struct StickState {
     bool active = false;
@@ -241,6 +250,13 @@ class TouchInputDriver final : public InputDriver, public rex::ui::WindowInputLi
   std::vector<uint16_t> control_buttons_;
   // Parallel to layout_.sticks.
   std::vector<StickState> stick_states_;
+
+  bool sensors_initialized_ = false;
+  SDL_Sensor* gyro_sensor_ = nullptr;
+  SDL_Sensor* accel_sensor_ = nullptr;
+  // Low passed accelerometer, pointing up, in device space.
+  float gravity_[3] = {};
+  bool gravity_valid_ = false;
 
   uint32_t packet_number_ = 0;
   std::chrono::steady_clock::time_point last_touch_time_ = std::chrono::steady_clock::now();
