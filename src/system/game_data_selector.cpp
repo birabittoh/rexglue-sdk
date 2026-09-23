@@ -1313,10 +1313,10 @@ bool RunFileDialog(std::string& out_path, std::span<const SDL_DialogFileFilter> 
   // On async platforms (Linux portal) the callback is triggered by SDL's
   // event loop, so we must pump until it arrives.
   while (!state.done.load(std::memory_order_acquire)) {
-    SDL_Event ev;
-    while (SDL_PollEvent(&ev)) {
-      // Pumping allows the portal callback to fire.
-    }
+    // Pumping allows the portal callback to fire. Not draining: the app window
+    // may already exist, and the resize it gets when the dialog closes (Android
+    // hands the activity a new surface) must still reach it.
+    SDL_PumpEvents();
     SDL_Delay(16);
   }
 
@@ -1338,10 +1338,7 @@ bool RunFolderDialog(std::string& out_path) {
   SDL_ShowOpenFolderDialog(FileDialogCallback, &state, nullptr, nullptr, false);
 
   while (!state.done.load(std::memory_order_acquire)) {
-    SDL_Event ev;
-    while (SDL_PollEvent(&ev)) {
-      // Pumping allows the portal callback to fire.
-    }
+    SDL_PumpEvents();  // See RunFileDialog.
     SDL_Delay(16);
   }
 
