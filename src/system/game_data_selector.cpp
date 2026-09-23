@@ -706,7 +706,7 @@ uint32_t ExtractIsoTo(const std::filesystem::path& iso_path, const std::filesyst
   REXLOG_INFO("ISO holds {} files, {} bytes", measured.files, measured.bytes);
 
   ExtractResult result;
-  ProgressReporter progress("Extracting game files", measured.bytes);
+  ProgressReporter progress("Extracting game files...", measured.bytes);
   reader.SetProgress(&progress);
   ExtractXdvdfsDirectory(reader, info->game_offset, info->root_offset, out_dir, 0, result);
 
@@ -1070,7 +1070,7 @@ uint32_t ExtractXblaTo(const std::filesystem::path& xbla_path,
   REXLOG_INFO("Extracting {} STFS entries from {}", entries.size(), xbla_path.string());
 
   std::filesystem::create_directories(out_dir);
-  ProgressReporter progress("Extracting game files", SumStfsFileBytes(entries));
+  ProgressReporter progress("Extracting game files...", SumStfsFileBytes(entries));
   reader.SetProgress(&progress);
   auto result = ExtractStfsTree(reader, entries, *info, out_dir, nullptr);
 
@@ -1178,7 +1178,7 @@ uint32_t ExtractTitleUpdateTo(const std::filesystem::path& tu_path,
 
   // Extract the package whole, delta patch included.
   std::filesystem::create_directories(update_dir);
-  ProgressReporter progress("Extracting title update", SumStfsFileBytes(entries));
+  ProgressReporter progress("Extracting title update...", SumStfsFileBytes(entries));
   reader.SetProgress(&progress);
   auto result = ExtractStfsTree(reader, entries, *info, update_dir, nullptr);
   if (!result.complete) {
