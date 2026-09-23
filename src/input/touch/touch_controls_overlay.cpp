@@ -87,9 +87,13 @@ void DrawLabel(ImDrawList* draw_list, const char* label, float cx, float cy, flo
   if (!label || !*label) {
     return;
   }
-  const ImVec2 size = ImGui::CalcTextSize(label);
+  // The base size, not the current one: the layout is in window pixels, so the
+  // labels must not follow a host's global UI scale (style.FontScaleMain).
+  ImFont* font = ImGui::GetFont();
+  const float font_size = ImGui::GetStyle().FontSizeBase;
+  const ImVec2 size = font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, label);
   const float a = std::min(alpha * (pressed ? kPressedBoost : 1.0f) * 1.8f, 1.0f);
-  draw_list->AddText(ImVec2(cx - size.x * 0.5f, cy - size.y * 0.5f),
+  draw_list->AddText(font, font_size, ImVec2(cx - size.x * 0.5f, cy - size.y * 0.5f),
                      ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, a)), label);
 }
 
