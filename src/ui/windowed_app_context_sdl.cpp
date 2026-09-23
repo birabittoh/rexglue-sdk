@@ -97,6 +97,15 @@ void SDLWindowedAppContext::PlatformQuitFromUIThread() {
   NotifyUILoopOfPendingFunctions();
 }
 
+void SDLWindowedAppContext::ProcessPendingWindowEvents() {
+  SDL_PumpEvents();
+  SDL_Event event;
+  while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_EVENT_WINDOW_FIRST, SDL_EVENT_WINDOW_LAST) >
+         0) {
+    ProcessEvent(event);
+  }
+}
+
 int SDLWindowedAppContext::RunMainMessageLoop() {
   while (!HasQuitFromUIThread()) {
     SDL_Event event;

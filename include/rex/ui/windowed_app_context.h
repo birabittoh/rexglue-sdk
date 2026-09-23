@@ -34,6 +34,10 @@ class WindowedAppContext {
   // running the loop.
   bool IsInUIThread() const { return std::this_thread::get_id() == ui_thread_id_; }
 
+  // For a UI thread busy with a long step: dispatches queued window events
+  // (resize, focus, close) now and leaves every other event for the loop.
+  virtual void ProcessPendingWindowEvents() {}
+
   // CallInUIThreadDeferred and CallInUIThread are fire and forget - will be
   // executed at some point the future when the UI thread is running the loop
   // and is not busy doing other things.

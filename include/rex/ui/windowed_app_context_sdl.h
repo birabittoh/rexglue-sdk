@@ -33,6 +33,7 @@ class SDLWindowedAppContext final : public WindowedAppContext {
 
   void NotifyUILoopOfPendingFunctions() override;
   void PlatformQuitFromUIThread() override;
+  void ProcessPendingWindowEvents() override;
 
   int RunMainMessageLoop();
 
