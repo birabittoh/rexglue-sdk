@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <sstream>
 #include <span>
@@ -133,6 +134,7 @@ std::vector<std::filesystem::path> GetPreExtractedCandidates() {
 ProgressWindowTheme g_progress_theme;
 const void* g_progress_icon_data = nullptr;
 size_t g_progress_icon_size = 0;
+std::function<void(const std::string&, float, const std::string&)> g_progress_callback;
 
 /// Progress for the steps that take a minute or more: disc/XBLA extraction and,
 /// on Android, copying the picked content:// URI into the app's storage.
@@ -147,6 +149,10 @@ class ProgressReporter {
   /// because SDL_GetIOSize can fail on a stream that has no size.
   ProgressReporter(std::string label, uint64_t total_bytes)
       : label_(std::move(label)), total_bytes_(total_bytes) {
+    if (!g_progress_callback) {
+      window_.emplace("Preparing game files", g_progress_theme, g_progress_icon_data,
+                      g_progress_icon_size);
+    }
     Draw();
     Log();
   }
@@ -210,7 +216,11 @@ class ProgressReporter {
 
   void Draw() {
     last_draw_ms_ = SDL_GetTicks();
-    window_.Draw(label_, Fraction(), Detail());
+    if (g_progress_callback) {
+      g_progress_callback(label_, Fraction(), Detail());
+    } else {
+      window_->Draw(label_, Fraction(), Detail());
+    }
   }
 
   void Log() {
@@ -218,8 +228,8 @@ class ProgressReporter {
     REXLOG_INFO("{}: {}", label_, Detail());
   }
 
-  rex::ui::ProgressWindow window_{"Preparing game files", g_progress_theme, g_progress_icon_data,
-                                  g_progress_icon_size};
+  // Only when the app has nowhere of its own to draw progress.
+  std::optional<rex::ui::ProgressWindow> window_;
   std::string label_;
   uint64_t total_bytes_ = 0;
   uint64_t bytes_ = 0;
@@ -1581,6 +1591,7 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
   g_progress_theme = settings.progress_theme;
   g_progress_icon_data = settings.progress_icon_data;
   g_progress_icon_size = settings.progress_icon_size;
+  g_progress_callback = settings.progress_callback;
 
 #if REX_PLATFORM_ANDROID
   RemoveLegacyImportCopy();

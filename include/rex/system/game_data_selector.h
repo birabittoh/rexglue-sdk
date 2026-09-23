@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
 
@@ -41,6 +42,14 @@ struct GameDataSelectorSettings {
   /// show no icon.
   const void* progress_icon_data = nullptr;
   size_t progress_icon_size = 0;
+
+  /// When set, extraction progress goes here instead of to the SDK's own
+  /// progress window, for an app that already has a window to draw into.
+  /// Called on the UI thread about 30 times a second; `fraction` outside
+  /// [0,1] means the total is unknown. It is also what keeps the app window
+  /// responsive, so it should pump events.
+  std::function<void(const std::string& title, float fraction, const std::string& detail)>
+      progress_callback;
 };
 
 /// Synchronous startup wizard that runs BEFORE any window or presenter is
