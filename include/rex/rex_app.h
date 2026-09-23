@@ -254,6 +254,11 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   /// defaults and only pick up the new ones on the next launch.
   void RefreshPathDefaultsIfCvarsChanged();
 
+  /// The paths OnFinalizePaths is handed, current as of the last refresh. For
+  /// an override that changes path cvars itself (running GameDataSelector once
+  /// the window exists) and then refreshes.
+  const PathConfig& resolved_path_defaults() const { return resolved_defaults_; }
+
   /// Construct Runtime with the given paths, call runtime_->Setup, load the
   /// XEX image, initialize the rexcrt heap. Runs OnPostSetup at the end.
   virtual bool ConstructRuntime(const PathConfig& paths);
