@@ -97,6 +97,7 @@ target_link_libraries(rexruntime
         SDL3::SDL3
     PRIVATE
         aes128
+        miniz
         mspack
         xxHash::xxhash
         picosha2

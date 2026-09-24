@@ -4,8 +4,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <rex/ui/progress_window.h>
 
@@ -21,6 +23,12 @@ struct GameDataSelectorSettings {
   /// Optional SHA-256 hex string. If non-empty, default.xex inside the game
   /// data *must* match this hash or the module fails with a message box.
   std::string default_xex_sha256;
+
+  /// Patches that turn another release's default.xex into the pinned one, as
+  /// written by the project's gen-xex-patch.py ("RXD1"). A default.xex matching
+  /// a patch's source is converted in place on validation, its original kept as
+  /// default.xex.orig. Not owned; must outlive the EnsureGameData call.
+  std::vector<std::span<const uint8_t>> default_xex_patches;
 
   /// SHA-256 hex string for the title-update package file. If non-empty, a
   /// title update is required.
@@ -51,6 +59,13 @@ struct GameDataSelectorSettings {
   std::function<void(const std::string& title, float fraction, const std::string& detail)>
       progress_callback;
 };
+
+/// Applies an "RXD1" patch (see default_xex_patches) to arbitrary bytes, for
+/// apps that also convert data files between releases. Fails, leaving `out`
+/// unspecified, unless `source` is the patch's source and the result its
+/// target, both checked by SHA-256.
+bool ApplyReleasePatch(std::span<const uint8_t> patch, const std::vector<uint8_t>& source,
+                       std::vector<uint8_t>& out);
 
 /// Synchronous startup wizard that runs BEFORE any window or presenter is
 /// created. Uses native SDL dialogs (message boxes + file open dialog) to

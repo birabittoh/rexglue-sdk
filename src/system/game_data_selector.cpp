@@ -25,12 +25,14 @@
 #include <vector>
 
 #include <SDL3/SDL.h>
+#include <miniz.h>
 #include <picosha2.h>
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
+#include <rex/system/xex_module.h>
 #include <rex/ui/progress_window.h>
 
 #if REX_PLATFORM_ANDROID
@@ -1233,24 +1235,198 @@ std::string Sha256File(const std::filesystem::path& path) {
   return picosha2::bytes_to_hex_string(hash.begin(), hash.end());
 }
 
-/// Check that default.xex exists at dir and, if expected is non-empty, that
-/// its SHA-256 matches.
-bool ValidateDefaultXexInDir(const std::filesystem::path& dir, std::string_view expected) {
+/// Hex SHA-256 of a byte range.
+std::string Sha256Hex(const uint8_t* data, size_t size) {
+  std::vector<unsigned char> hash(picosha2::k_digest_size);
+  picosha2::hash256(data, data + size, hash.begin(), hash.end());
+  return picosha2::bytes_to_hex_string(hash.begin(), hash.end());
+}
+
+/// A default_xex_patches entry, header parsed; see GameDataSelectorSettings.
+struct XexPatch {
+  std::string source_file_sha256;
+  std::string source_sha256;
+  std::string target_sha256;
+  uint64_t source_size = 0;
+  uint64_t target_size = 0;
+  uint64_t control_count = 0;
+  uint64_t diff_size = 0;
+  uint64_t extra_size = 0;
+  std::span<const uint8_t> payload;
+};
+
+constexpr size_t kXexPatchHeaderSize = 0x8C;
+
+uint64_t ReadLE64(const uint8_t* p) {
+  uint64_t v = 0;
+  for (int i = 7; i >= 0; --i)
+    v = (v << 8) | p[i];
+  return v;
+}
+
+std::optional<XexPatch> ParseXexPatch(std::span<const uint8_t> data) {
+  if (data.size() < kXexPatchHeaderSize || std::memcmp(data.data(), "RXD1", 4) != 0) {
+    return std::nullopt;
+  }
+  XexPatch patch;
+  patch.source_file_sha256 =
+      picosha2::bytes_to_hex_string(data.begin() + 0x04, data.begin() + 0x24);
+  patch.source_sha256 = picosha2::bytes_to_hex_string(data.begin() + 0x24, data.begin() + 0x44);
+  patch.target_sha256 = picosha2::bytes_to_hex_string(data.begin() + 0x44, data.begin() + 0x64);
+  patch.source_size = ReadLE64(data.data() + 0x64);
+  patch.target_size = ReadLE64(data.data() + 0x6C);
+  patch.control_count = ReadLE64(data.data() + 0x74);
+  patch.diff_size = ReadLE64(data.data() + 0x7C);
+  patch.extra_size = ReadLE64(data.data() + 0x84);
+  patch.payload = data.subspan(kXexPatchHeaderSize);
+  return patch;
+}
+
+/// The form patches work on: the original headers with encryption and
+/// compression switched off, followed by the flat image, which the loader
+/// takes as is. Must match the project's gen-xex-patch.py.
+bool NormalizeXex(const std::vector<uint8_t>& xex, std::vector<uint8_t>& out) {
+  std::vector<uint8_t> image;
+  if (!rex::runtime::XexModule::ExtractBaseImage(xex.data(), xex.size(), image)) {
+    return false;
+  }
+  auto be32 = [&](size_t off) {
+    return uint32_t(xex[off]) << 24 | uint32_t(xex[off + 1]) << 16 | uint32_t(xex[off + 2]) << 8 |
+           uint32_t(xex[off + 3]);
+  };
+  const uint32_t header_size = be32(8);
+  const uint32_t header_count = be32(20);
+  out.assign(xex.begin(), xex.begin() + header_size);
+  for (uint32_t i = 0; i < header_count && 24 + 8 * i + 8 <= header_size; ++i) {
+    if (be32(24 + 8 * i) != XEX_HEADER_FILE_FORMAT_INFO) {
+      continue;
+    }
+    const uint32_t info = be32(24 + 8 * i + 4);
+    if (info + 8 > header_size) {
+      return false;
+    }
+    std::memset(out.data() + info + 4, 0, 4);  // encryption and compression types
+    out.insert(out.end(), image.begin(), image.end());
+    return true;
+  }
+  return false;
+}
+
+bool ApplyXexPatch(const XexPatch& patch, const std::vector<uint8_t>& source,
+                   std::vector<uint8_t>& out) {
+  const uint64_t control_size = patch.control_count * 24;
+  std::vector<uint8_t> payload(control_size + patch.diff_size + patch.extra_size);
+  mz_ulong length = mz_ulong(payload.size());
+  if (mz_uncompress(payload.data(), &length, patch.payload.data(),
+                    mz_ulong(patch.payload.size())) != MZ_OK ||
+      length != payload.size()) {
+    return false;
+  }
+  const uint8_t* diff = payload.data() + control_size;
+  const uint8_t* extra = diff + patch.diff_size;
+  out.clear();
+  out.reserve(patch.target_size);
+  int64_t s = 0;
+  uint64_t d = 0, e = 0;
+  for (uint64_t n = 0; n < patch.control_count; ++n) {
+    const int64_t add = int64_t(ReadLE64(payload.data() + n * 24));
+    const int64_t copy = int64_t(ReadLE64(payload.data() + n * 24 + 8));
+    const int64_t seek = int64_t(ReadLE64(payload.data() + n * 24 + 16));
+    if (add < 0 || copy < 0 || d + add > patch.diff_size || e + copy > patch.extra_size || s < 0 ||
+        uint64_t(s + add) > source.size()) {
+      return false;
+    }
+    for (int64_t i = 0; i < add; ++i)
+      out.push_back(uint8_t(source[s + i] + diff[d + i]));
+    s += add;
+    d += add;
+    out.insert(out.end(), extra + e, extra + e + copy);
+    e += copy;
+    s += seek;
+  }
+  return out.size() == patch.target_size;
+}
+
+/// Rewrites a recognised other release's default.xex into the pinned one,
+/// keeping the original next to it as default.xex.orig.
+bool ConvertXex(const std::filesystem::path& xex_path, const XexPatch& patch) {
+  std::vector<uint8_t> xex;
+  {
+    std::ifstream in(xex_path, std::ios::binary);
+    xex.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  }
+  std::vector<uint8_t> source, target;
+  if (!NormalizeXex(xex, source) || source.size() != patch.source_size ||
+      !HexEqual(Sha256Hex(source.data(), source.size()), patch.source_sha256)) {
+    REXLOG_ERROR("default.xex could not be normalised for conversion");
+    return false;
+  }
+  if (!ApplyXexPatch(patch, source, target) ||
+      !HexEqual(Sha256Hex(target.data(), target.size()), patch.target_sha256)) {
+    REXLOG_ERROR("default.xex conversion produced the wrong image");
+    return false;
+  }
+  const auto tmp_path = std::filesystem::path(xex_path).concat(".tmp");
+  {
+    std::ofstream out(tmp_path, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(target.data()), std::streamsize(target.size()));
+    if (!out) {
+      REXLOG_ERROR("Could not write {}", tmp_path.string());
+      return false;
+    }
+  }
+  std::error_code ec;
+  std::filesystem::rename(xex_path, std::filesystem::path(xex_path).concat(".orig"), ec);
+  if (!ec) {
+    std::filesystem::rename(tmp_path, xex_path, ec);
+  }
+  if (ec) {
+    REXLOG_ERROR("Could not install the converted default.xex: {}", ec.message());
+    return false;
+  }
+  return true;
+}
+
+/// Check that default.xex exists at dir and, if a hash is pinned, that it is
+/// the pinned release, one already converted from a patch's source release, or
+/// a patch's source release, which is then converted in place.
+bool ValidateDefaultXexInDir(const std::filesystem::path& dir,
+                             const GameDataSelectorSettings& settings) {
   auto xex_path = dir / "default.xex";
   if (!std::filesystem::is_regular_file(xex_path)) {
     REXLOG_ERROR("default.xex not found in {}", dir.string());
     return false;
   }
+  const std::string& expected = settings.default_xex_sha256;
   if (expected.empty()) {
     return true;
   }
   std::string actual = Sha256File(xex_path);
-  if (!HexEqual(actual, expected)) {
-    REXLOG_ERROR("default.xex SHA-256 mismatch: expected={}, actual={}", expected, actual);
-    return false;
+  if (HexEqual(actual, expected)) {
+    REXLOG_INFO("default.xex SHA-256 verified OK");
+    return true;
   }
-  REXLOG_INFO("default.xex SHA-256 verified OK");
-  return true;
+  for (const auto data : settings.default_xex_patches) {
+    const auto patch = ParseXexPatch(data);
+    if (!patch) {
+      REXLOG_ERROR("Ignoring a malformed default.xex patch");
+      continue;
+    }
+    if (HexEqual(actual, patch->target_sha256)) {
+      REXLOG_INFO("default.xex SHA-256 verified OK (converted from another release)");
+      return true;
+    }
+    if (HexEqual(actual, patch->source_file_sha256)) {
+      REXLOG_INFO("default.xex is from another release; converting it");
+      if (!ConvertXex(xex_path, *patch)) {
+        return false;
+      }
+      REXLOG_INFO("default.xex converted; the original is kept as default.xex.orig");
+      return true;
+    }
+  }
+  REXLOG_ERROR("default.xex SHA-256 mismatch: expected={}, actual={}", expected, actual);
+  return false;
 }
 
 /// Case-insensitive extension check.
@@ -1440,7 +1616,8 @@ void PersistGameDataRoot(const GameDataSelectorSettings& settings) {
 // Validation
 // =============================================================================
 
-static bool IsGameDataValid(std::string_view game_data_root, std::string_view default_xex_sha256) {
+static bool IsGameDataValid(std::string_view game_data_root,
+                            const GameDataSelectorSettings& settings) {
   if (game_data_root.empty()) {
     return false;
   }
@@ -1448,7 +1625,7 @@ static bool IsGameDataValid(std::string_view game_data_root, std::string_view de
   if (!std::filesystem::is_directory(dir)) {
     return false;
   }
-  return ValidateDefaultXexInDir(dir, default_xex_sha256);
+  return ValidateDefaultXexInDir(dir, settings);
 }
 
 // =============================================================================
@@ -1598,7 +1775,7 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
   std::filesystem::path dir;
   {
     std::string gdr = REXCVAR_GET(game_data_root);
-    if (!gdr.empty() && IsGameDataValid(gdr, settings.default_xex_sha256)) {
+    if (!gdr.empty() && IsGameDataValid(gdr, settings)) {
       REXLOG_INFO("game_data_root already valid: {}", gdr);
       dir = std::filesystem::path(gdr);
       // The game files are known-good, so a failed title update means the user
@@ -1617,7 +1794,7 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
   // is the only way an already-extracted copy can be used at all, since there is
   // no folder picker to point at one.
   for (const auto& candidate : GetPreExtractedCandidates()) {
-    if (!IsGameDataValid(candidate.string(), settings.default_xex_sha256)) {
+    if (!IsGameDataValid(candidate.string(), settings)) {
       REXLOG_INFO("No usable game data at {}", candidate.string());
       continue;
     }
@@ -1727,7 +1904,7 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
   // 6. Process the selection.
   if (!is_content_uri && std::filesystem::is_directory(selected_path)) {
     dir = selected_path;
-    if (!ValidateDefaultXexInDir(dir, settings.default_xex_sha256)) {
+    if (!ValidateDefaultXexInDir(dir, settings)) {
       ShowErrorBox("Validation Failed",
                    "default.xex was not found or its SHA-256 hash did not "
                    "match.\n\n"
@@ -1773,7 +1950,7 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
     }
     REXLOG_INFO("Extraction complete: {} files written", file_count);
 
-    if (!ValidateDefaultXexInDir(out_dir, settings.default_xex_sha256)) {
+    if (!ValidateDefaultXexInDir(out_dir, settings)) {
       ShowErrorBox("Validation Failed",
                    std::string("default.xex was not found or its SHA-256 hash did not "
                                "match after extraction.\n\nThe ") +
@@ -1818,6 +1995,15 @@ bool GameDataSelector::EnsureGameData(const GameDataSelectorSettings& settings) 
     ShowErrorBox("Setup Failed", "Something went wrong while preparing the game files.");
     return false;
   }
+}
+
+bool ApplyReleasePatch(std::span<const uint8_t> patch_data, const std::vector<uint8_t>& source,
+                       std::vector<uint8_t>& out) {
+  const auto patch = ParseXexPatch(patch_data);
+  return patch && source.size() == patch->source_size &&
+         HexEqual(Sha256Hex(source.data(), source.size()), patch->source_sha256) &&
+         ApplyXexPatch(*patch, source, out) &&
+         HexEqual(Sha256Hex(out.data(), out.size()), patch->target_sha256);
 }
 
 }  // namespace rex::system
