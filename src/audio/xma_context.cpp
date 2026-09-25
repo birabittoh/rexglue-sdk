@@ -212,6 +212,7 @@ void XmaContext::ResetDecoderState() {
   pcm_replacement_tag_.fill(0);
   pcm_replacement_cursor_ = 0;
   pcm_replacement_active_ = false;
+  invalid_packet_reported_ = false;
 }
 
 bool XmaContext::DecodePcmReplacement(XMA_CONTEXT_DATA* data) {
@@ -615,8 +616,31 @@ void XmaContext::Decode(XMA_CONTEXT_DATA* data) {
   const int16_t packet_index = GetPacketNumber(current_input_size, data->input_buffer_read_offset);
 
   if (packet_index == -1) {
-    REXAPU_ERROR("XmaContext {}: Invalid packet index. Input read offset: {}", id(),
-                 static_cast<uint32_t>(data->input_buffer_read_offset));
+    if (!invalid_packet_reported_) {
+      // Once per stream: the guest set a read offset past its buffer, and the
+      // buffers say what it was playing.
+      invalid_packet_reported_ = true;
+      auto head = [this](uint32_t address) {
+        std::string hex;
+        const uint8_t* bytes = address ? memory()->TranslatePhysical(address) : nullptr;
+        for (int i = 0; bytes && i < 16; ++i)
+          hex += fmt::format("{:02x}", bytes[i]);
+        return hex;
+      };
+      REXAPU_ERROR(
+          "XmaContext {}: read offset {} is past its buffer; current {} | buf0 {:08X} x{} "
+          "valid {} [{}] | buf1 {:08X} x{} valid {} [{}] | loop {} {}..{} | stereo {} rate {} "
+          "| pcm active {}",
+          id(), static_cast<uint32_t>(data->input_buffer_read_offset),
+          static_cast<uint32_t>(data->current_buffer), data->input_buffer_0_ptr,
+          static_cast<uint32_t>(data->input_buffer_0_packet_count),
+          static_cast<uint32_t>(data->input_buffer_0_valid), head(data->input_buffer_0_ptr),
+          data->input_buffer_1_ptr, static_cast<uint32_t>(data->input_buffer_1_packet_count),
+          static_cast<uint32_t>(data->input_buffer_1_valid), head(data->input_buffer_1_ptr),
+          static_cast<uint32_t>(data->loop_count), static_cast<uint32_t>(data->loop_start),
+          static_cast<uint32_t>(data->loop_end), static_cast<uint32_t>(data->is_stereo),
+          static_cast<uint32_t>(data->sample_rate), pcm_replacement_active_);
+    }
     return;
   }
 

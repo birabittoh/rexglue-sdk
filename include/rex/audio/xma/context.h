@@ -315,6 +315,7 @@ class XmaContext {
   std::array<uint8_t, 16> pcm_replacement_tag_{};
   uint64_t pcm_replacement_cursor_ = 0;
   bool pcm_replacement_active_ = false;
+  bool invalid_packet_reported_ = false;
 
   // Start-padding realignment state. Attributes belong to the frame whose
   // samples are still being assembled, so they land one decode after the frame
