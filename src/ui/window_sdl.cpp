@@ -233,6 +233,12 @@ bool WindowSDL::OpenImpl() {
   return true;
 }
 
+void WindowSDL::Hide() {
+  if (sdl_window_) {
+    SDL_HideWindow(sdl_window_);
+  }
+}
+
 void WindowSDL::RequestCloseImpl() {
   PerformClose();
 }

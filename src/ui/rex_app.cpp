@@ -1023,6 +1023,11 @@ void ReXApp::OnClosing(ui::UIEvent& e) {
   (void)e;
   REXLOG_INFO("Window closing, shutting down...");
   shutting_down_.store(true, std::memory_order_release);
+  // The window is only destroyed by process teardown after _Exit, which can
+  // take seconds; hide it now so closing looks immediate.
+  if (window_) {
+    window_->Hide();
+  }
   if (runtime_ && runtime_->kernel_state()) {
     runtime_->kernel_state()->TerminateTitle();
   }

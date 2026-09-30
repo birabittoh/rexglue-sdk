@@ -307,6 +307,10 @@ class Window {
   /// successfully.
   virtual void* GetSDLWindowHandle() const { return nullptr; }
 
+  /// Hides the window immediately, from the UI thread. Lives in the runtime so
+  /// callers in the app never reach its SDL instance through their own copy.
+  virtual void Hide() {}
+
   // Desired state stored by the common Window, externally modifiable, read-only
   // in the implementation.
   void SetMainMenu(std::unique_ptr<MenuItem> new_main_menu);
