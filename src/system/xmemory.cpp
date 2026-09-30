@@ -629,6 +629,16 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
         "guest_protect={:08X} physical_protect={:08X}",
         virtual_address, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(host_address)),
         physical_address, current_guest_protect, physical_protect);
+  } else {
+    // Log reads too, so a crash on one leaves a trace.
+    HeapAllocationInfo info{};
+    heap->QueryRegionInfo(virtual_address, &info);
+    REXSYS_ERROR(
+        "Unhandled guest physical read fault: guest={:08X} host={:016X} phys={:08X} "
+        "state={:X} protect={:08X} region={:08X}+{:X} on thread 0x{:X}",
+        virtual_address, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(host_address)),
+        GetPhysicalAddress(virtual_address), info.state, info.protect, info.base_address,
+        info.region_size, rex::thread::current_thread_id());
   }
 
   return false;
@@ -1592,7 +1602,8 @@ bool BaseHeap::Release(uint32_t base_address, uint32_t* out_region_size) {
   uint32_t base_page_number = (base_address - heap_base_) >> page_size_shift_;
   auto base_page_entry = page_table_[base_page_number];
   if (base_page_entry.base_address != base_page_number) {
-    REXSYS_ERROR("BaseHeap::Release failed because address is not a region start");
+    REXSYS_ERROR("BaseHeap::Release failed because address {:08X} is not a region start",
+                 base_address);
     return false;
   }
 

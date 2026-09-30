@@ -11,16 +11,26 @@
 
 #if defined(__APPLE__) && !defined(_XOPEN_SOURCE)
 // Darwin hides the deprecated ucontext API unless an XSI feature level is
-// requested before <ucontext.h> is included.
+// requested before <ucontext.h> is included. That strict mode also hides
+// Dl_info from <dlfcn.h>, so keep the Darwin extensions visible.
 #define _XOPEN_SOURCE 700
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE
+#endif
 #endif
 
 #include <rex/exception_handler.h>
 
 #if REX_PLATFORM_LINUX || REX_PLATFORM_MAC
 
+#include <dlfcn.h>
 #include <signal.h>
+#if defined(__GLIBC__) || REX_PLATFORM_MAC
+#include <execinfo.h>
+#define REX_HAVE_EXECINFO 1
+#endif
 
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 
@@ -28,6 +38,7 @@
 #include <rex/logging.h>
 #include <rex/math.h>
 #include <rex/platform.h>
+#include <rex/thread.h>
 
 #include <ucontext.h>
 
@@ -48,6 +59,42 @@ constexpr size_t kMaxHandlerCount = 8;
 // All custom handlers, left-aligned and null terminated.
 // Executed in order.
 std::pair<ExceptionHandler::Handler, void*> handlers_[kMaxHandlerCount];
+
+// Say where an unhandled fault happened before the process goes down, since
+// nothing else leaves a trace of it in the log.
+void ReportUnhandledSignal(int signal_number, const siginfo_t* signal_info, uint64_t host_pc) {
+  static std::atomic<bool> reported{false};
+  if (reported.exchange(true)) {
+    return;
+  }
+  Dl_info module{};
+  const bool have_module =
+      dladdr(reinterpret_cast<void*>(host_pc), &module) != 0 && module.dli_fname != nullptr;
+  REXSYS_CRITICAL(
+      "Unhandled signal {} (code {}) at host pc 0x{:016X} ({}+0x{:X}), fault address 0x{:016X}, "
+      "thread 0x{:X}",
+      signal_number, signal_info ? signal_info->si_code : 0, host_pc,
+      have_module ? module.dli_fname : "?",
+      have_module ? host_pc - reinterpret_cast<uintptr_t>(module.dli_fbase) : 0,
+      signal_info ? reinterpret_cast<uintptr_t>(signal_info->si_addr) : 0,
+      rex::thread::current_thread_id());
+#if REX_HAVE_EXECINFO
+  void* frames[48];
+  const int count = backtrace(frames, 48);
+  for (int i = 0; i < count; ++i) {
+    Dl_info frame{};
+    const uintptr_t address = reinterpret_cast<uintptr_t>(frames[i]);
+    if (dladdr(frames[i], &frame) != 0 && frame.dli_fname != nullptr) {
+      REXSYS_CRITICAL("  #{:02} 0x{:016X} {}+0x{:X} {}", i, address, frame.dli_fname,
+                      address - reinterpret_cast<uintptr_t>(frame.dli_fbase),
+                      frame.dli_sname ? frame.dli_sname : "");
+    } else {
+      REXSYS_CRITICAL("  #{:02} 0x{:016X}", i, address);
+    }
+  }
+#endif
+  rex::FlushLogging();
+}
 
 static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
                                      void* signal_context) {
@@ -417,6 +464,12 @@ static void ExceptionHandlerCallback(int signal_number, siginfo_t* signal_info,
       return;
     }
   }
+
+#if REX_ARCH_AMD64
+  ReportUnhandledSignal(signal_number, signal_info, thread_context.rip);
+#else
+  ReportUnhandledSignal(signal_number, signal_info, thread_context.pc);
+#endif
 
   // Nobody claimed it. Returning would retry the faulting instruction forever,
   // leaving the thread spinning on a fault instead of dying, so hand the signal
