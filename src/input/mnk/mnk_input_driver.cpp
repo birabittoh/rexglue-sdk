@@ -124,7 +124,7 @@ std::string_view TrimSpaces(std::string_view s) {
 
 bool TokenPressed(const bool (&key_down)[258], std::string_view token, uint8_t live_mods) {
   uint8_t want = TakeModifiers(token);
-  if (want != live_mods) {
+  if (want != 0 && want != live_mods) {
     return false;
   }
   rex::ui::VirtualKey vk = rex::ui::ParseVirtualKey(token);
