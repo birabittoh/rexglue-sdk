@@ -59,10 +59,6 @@ void AchievementManager::ReplaceAchievements(std::vector<AchievementInfo> achiev
   std::lock_guard lock(mutex_);
   achievements_.clear();
   for (auto& achievement : achievements) {
-    if (achievement.id == 0) {
-      REXSYS_WARN("Achievement store: refusing achievement with ID 0");
-      continue;
-    }
     auto existing =
         std::find_if(achievements_.begin(), achievements_.end(),
                      [&](const AchievementInfo& current) { return current.id == achievement.id; });
