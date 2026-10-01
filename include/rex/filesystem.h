@@ -44,6 +44,15 @@ std::filesystem::path GetUserFolder();
 // attempting to create it.
 bool CreateParentFolder(const std::filesystem::path& path);
 
+// Resolves a relative path against base; absolute and empty paths pass through.
+std::filesystem::path ResolveRelativeTo(const std::filesystem::path& path,
+                                        const std::filesystem::path& base);
+
+// Returns path relative to base when it lies inside base, otherwise path
+// unchanged. Lets configs keep pointing at folders that move along with base.
+std::filesystem::path RelativeIfInside(const std::filesystem::path& path,
+                                       const std::filesystem::path& base);
+
 // Creates an empty file at the given path, overwriting if it exists.
 bool CreateEmptyFile(const std::filesystem::path& path);
 

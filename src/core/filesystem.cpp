@@ -26,5 +26,36 @@ bool CreateParentFolder(const std::filesystem::path& path) {
   return true;
 }
 
+std::filesystem::path ResolveRelativeTo(const std::filesystem::path& path,
+                                        const std::filesystem::path& base) {
+  if (path.empty() || path.is_absolute() || base.empty()) {
+    return path;
+  }
+  return (base / path).lexically_normal();
+}
+
+std::filesystem::path RelativeIfInside(const std::filesystem::path& path,
+                                       const std::filesystem::path& base) {
+  if (path.empty() || base.empty()) {
+    return path;
+  }
+  // Lexical on purpose: a junction inside base should stay relative even if it
+  // points elsewhere, since moving base moves the link with it.
+  std::error_code ec;
+  auto full = std::filesystem::absolute(path, ec).lexically_normal();
+  if (ec) {
+    return path;
+  }
+  auto root = std::filesystem::absolute(base, ec).lexically_normal();
+  if (ec) {
+    return path;
+  }
+  auto rel = full.lexically_relative(root);
+  if (rel.empty() || rel.is_absolute() || *rel.begin() == "..") {
+    return path;
+  }
+  return rel;
+}
+
 }  // namespace filesystem
 }  // namespace rex

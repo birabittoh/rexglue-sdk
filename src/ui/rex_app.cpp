@@ -179,19 +179,41 @@ bool ReXApp::OnInitialize() {
   return true;
 }
 
+// A portable.txt next to the executable keeps user data beside it too, so the
+// whole install can live on removable or synced storage.
+static bool IsPortableInstall() {
+#if REX_PLATFORM_ANDROID
+  return false;
+#else
+  std::error_code ec;
+  return std::filesystem::is_regular_file(rex::filesystem::GetExecutableFolder() / "portable.txt",
+                                          ec);
+#endif
+}
+
 PathConfig ReXApp::ResolvePathDefaults() {
+  // Relative path cvars follow the config file rather than the working
+  // directory, so the game behaves the same however it is launched.
+  const std::filesystem::path base = config_path_.parent_path();
+  auto resolve = [&base](const std::string& value) {
+    return rex::filesystem::ResolveRelativeTo(std::filesystem::path(value), base);
+  };
+
   // Game data: cvar override, or empty (the wizard / CLI must supply one)
   std::filesystem::path game_dir;
   std::string game_data_cvar = REXCVAR_GET(game_data_root);
   if (!game_data_cvar.empty()) {
-    game_dir = game_data_cvar;
+    game_dir = resolve(game_data_cvar);
   }
 
-  // User data: cvar override, or platform user directory
+  // User data: cvar override, a "user" folder next to the executable when
+  // portable.txt marks the install as portable, or the platform user folder.
   std::filesystem::path user_dir;
   std::string user_data_cvar = REXCVAR_GET(user_data_root);
   if (!user_data_cvar.empty()) {
-    user_dir = user_data_cvar;
+    user_dir = resolve(user_data_cvar);
+  } else if (IsPortableInstall()) {
+    user_dir = rex::filesystem::GetExecutableFolder() / "user";
   } else {
     user_dir = rex::filesystem::GetUserFolder() / GetName();
   }
@@ -200,14 +222,14 @@ PathConfig ReXApp::ResolvePathDefaults() {
   std::filesystem::path update_dir;
   std::string update_data_cvar = REXCVAR_GET(update_data_root);
   if (!update_data_cvar.empty()) {
-    update_dir = update_data_cvar;
+    update_dir = resolve(update_data_cvar);
   }
 
   // Cache: cvar override, or user_dir/cache
   std::filesystem::path cache_dir;
   std::string cache_root_cvar = REXCVAR_GET(cache_root);
   if (!cache_root_cvar.empty()) {
-    cache_dir = cache_root_cvar;
+    cache_dir = resolve(cache_root_cvar);
   } else {
     cache_dir = user_dir / "cache";
   }
@@ -215,7 +237,7 @@ PathConfig ReXApp::ResolvePathDefaults() {
   std::filesystem::path metadata_dir;
   std::string metadata_root_cvar = REXCVAR_GET(metadata_root);
   if (!metadata_root_cvar.empty()) {
-    metadata_dir = metadata_root_cvar;
+    metadata_dir = resolve(metadata_root_cvar);
   }
 
   path_cvar_snapshot_ = {game_data_cvar, user_data_cvar, update_data_cvar, cache_root_cvar,

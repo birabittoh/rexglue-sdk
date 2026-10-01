@@ -1596,6 +1596,23 @@ std::filesystem::path ResolveConfigPath(const GameDataSelectorSettings& settings
 #endif
 }
 
+/// Relative path cvars are resolved against the config file's folder, so a
+/// folder holding the executable, its config and the extracted files can be
+/// moved as a whole.
+std::filesystem::path ConfigBaseDir(const GameDataSelectorSettings& settings) {
+  return ResolveConfigPath(settings).parent_path();
+}
+
+std::filesystem::path ResolveCvarPath(std::string_view value,
+                                      const GameDataSelectorSettings& settings) {
+  return rex::filesystem::ResolveRelativeTo(std::filesystem::path(value), ConfigBaseDir(settings));
+}
+
+std::string CvarPathValue(const std::filesystem::path& dir,
+                          const GameDataSelectorSettings& settings) {
+  return rex::filesystem::RelativeIfInside(dir, ConfigBaseDir(settings)).string();
+}
+
 /// Write game_data_root (and update_data_root, if one is in use) back to the
 /// config file, patching just those lines and leaving the rest untouched.
 void PersistGameDataRoot(const GameDataSelectorSettings& settings) {
@@ -1616,12 +1633,11 @@ void PersistGameDataRoot(const GameDataSelectorSettings& settings) {
 // Validation
 // =============================================================================
 
-static bool IsGameDataValid(std::string_view game_data_root,
+static bool IsGameDataValid(const std::filesystem::path& dir,
                             const GameDataSelectorSettings& settings) {
-  if (game_data_root.empty()) {
+  if (dir.empty()) {
     return false;
   }
-  std::filesystem::path dir(game_data_root);
   if (!std::filesystem::is_directory(dir)) {
     return false;
   }
@@ -1635,10 +1651,10 @@ static bool IsGameDataValid(std::string_view game_data_root,
 /// Where the title update's files are extracted, to be mounted as the
 /// `update:` device. Honours an update_data_root the user has already
 /// configured; otherwise defaults to `update` next to the executable.
-static std::filesystem::path ResolveUpdateDir() {
+static std::filesystem::path ResolveUpdateDir(const GameDataSelectorSettings& settings) {
   std::string udr = REXCVAR_GET(update_data_root);
   if (!udr.empty()) {
-    return std::filesystem::path(udr);
+    return ResolveCvarPath(udr, settings);
   }
   return GetWritableBaseDir() / "update";
 }
@@ -1646,7 +1662,7 @@ static std::filesystem::path ResolveUpdateDir() {
 static bool ProcessTitleUpdate(const std::filesystem::path& dir,
                                const GameDataSelectorSettings& settings) {
   auto xexp_path = dir / "default.xexp";
-  auto update_dir = ResolveUpdateDir();
+  auto update_dir = ResolveUpdateDir(settings);
 
   // This build does not patch: a default.xexp left over from a build that did
   // would still be picked up by the loader, so remove the copy next to
@@ -1672,7 +1688,7 @@ static bool ProcessTitleUpdate(const std::filesystem::path& dir,
   if (std::filesystem::is_regular_file(xexp_path) && std::filesystem::is_directory(update_dir)) {
     REXLOG_INFO("default.xexp and the extracted update at {} are both present, skipping TU prompt",
                 update_dir.string());
-    REXCVAR_SET(update_data_root, update_dir.string());
+    REXCVAR_SET(update_data_root, CvarPathValue(update_dir, settings));
     return true;
   }
 
@@ -1690,7 +1706,7 @@ static bool ProcessTitleUpdate(const std::filesystem::path& dir,
         // Fall through to the prompt rather than failing outright.
       } else {
         REXLOG_INFO("Restored default.xexp from the extracted update at {}", update_dir.string());
-        REXCVAR_SET(update_data_root, update_dir.string());
+        REXCVAR_SET(update_data_root, CvarPathValue(update_dir, settings));
         return true;
       }
     } else {
@@ -1750,7 +1766,7 @@ static bool ProcessTitleUpdate(const std::filesystem::path& dir,
     REXLOG_INFO("Title update extracted: {} files", tu_count);
     // The extracted tree is what gets mounted as update:; record it so the
     // caller persists it alongside game_data_root.
-    REXCVAR_SET(update_data_root, update_dir.string());
+    REXCVAR_SET(update_data_root, CvarPathValue(update_dir, settings));
     return true;
   }
 }
@@ -1775,15 +1791,18 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
   std::filesystem::path dir;
   {
     std::string gdr = REXCVAR_GET(game_data_root);
-    if (!gdr.empty() && IsGameDataValid(gdr, settings)) {
-      REXLOG_INFO("game_data_root already valid: {}", gdr);
-      dir = std::filesystem::path(gdr);
+    auto gdr_dir = ResolveCvarPath(gdr, settings);
+    if (IsGameDataValid(gdr_dir, settings)) {
+      REXLOG_INFO("game_data_root already valid: {}", gdr_dir.string());
+      dir = gdr_dir;
       // The game files are known-good, so a failed title update means the user
       // quit out of the TU prompt. Re-prompting for the game files here would
       // throw away a perfectly valid extraction.
       if (!ProcessTitleUpdate(dir, settings)) {
         return false;
       }
+      // Rewrites an absolute path from an older run in the relative form.
+      REXCVAR_SET(game_data_root, CvarPathValue(dir, settings));
       PersistGameDataRoot(settings);
       return true;
     }
@@ -1794,7 +1813,7 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
   // is the only way an already-extracted copy can be used at all, since there is
   // no folder picker to point at one.
   for (const auto& candidate : GetPreExtractedCandidates()) {
-    if (!IsGameDataValid(candidate.string(), settings)) {
+    if (!IsGameDataValid(candidate, settings)) {
       REXLOG_INFO("No usable game data at {}", candidate.string());
       continue;
     }
@@ -1803,7 +1822,7 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
     if (!ProcessTitleUpdate(dir, settings)) {
       return false;
     }
-    REXCVAR_SET(game_data_root, dir.string());
+    REXCVAR_SET(game_data_root, CvarPathValue(dir, settings));
     PersistGameDataRoot(settings);
     return true;
   }
@@ -1965,7 +1984,7 @@ bool EnsureGameDataImpl(const GameDataSelectorSettings& settings) {
     return false;
   }
 
-  REXCVAR_SET(game_data_root, dir.string());
+  REXCVAR_SET(game_data_root, CvarPathValue(dir, settings));
   REXLOG_INFO("Game data set to: {}", dir.string());
 
   // Persist the resolved root so the wizard only runs once and an
