@@ -491,6 +491,12 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
   // Local map for late-detected jump tables (can't mutate const config)
   std::unordered_map<uint32_t, JumpTable> lateJumpTables;
 
+  // Route this function's memory accesses through the remap handler
+  const auto& remap = ctx.config.addressRemap;
+  const bool remapListed =
+      remap.enabled() && remap.functions.contains(static_cast<uint32_t>(base()));
+  const bool remapped = remapListed || (remap.enabled() && remap.allFunctions);
+
   std::string body;
   body.reserve(4096);
 
@@ -587,9 +593,20 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
           builderCtx.emit_mid_asm_hook();
         }
 
+        const size_t emitted = body.size();
         if (!DispatchInstruction(id, builderCtx)) {
           REXCODEGEN_WARN("Unrecognized instruction at 0x{:X}: {}", blockBase, insn.opcode->name);
           allRecompiled = false;
+        }
+
+        // Tell the remap handler which instruction made the access
+        if (remapped) {
+          const std::string_view code = std::string_view(body).substr(emitted);
+          if (code.find("REX_LOAD_") != code.npos || code.find("REX_STORE_") != code.npos ||
+              code.find("REX_RAW_ADDR") != code.npos || code.find("REX_MM_") != code.npos) {
+            body.insert(emitted,
+                        fmt::format("#undef REX_PC\n#define REX_PC 0x{:08X}u\n", blockBase));
+          }
         }
 
         // Check for mid-asm hook AFTER instruction
@@ -673,6 +690,13 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
     emit_println(out, "\tPPCVRegister vTemp{{}};");
   if (localVariables.ea)
     emit_println(out, "\tuint32_t ea{{}};");
+
+  if (remapped) {
+    out.insert(0, fmt::format("#pragma push_macro(\"REX_EA\")\n#undef REX_EA\n"
+                              "#define REX_EA(x) {}(x)\n#pragma push_macro(\"REX_PC\")\n",
+                              remapListed ? "REX_EA_REMAPPED" : "REX_EA_TRACED"));
+    body += "#pragma pop_macro(\"REX_PC\")\n#pragma pop_macro(\"REX_EA\")\n";
+  }
 
   // If SEH, emit SEH_TRY and indent body
   if (generateSeh) {

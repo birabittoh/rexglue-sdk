@@ -17,6 +17,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <toml++/toml.hpp>
@@ -38,6 +39,18 @@ struct MidAsmHook {
   uint32_t jumpAddressOnFalse = 0;
 
   bool afterInstruction = false;
+};
+
+// Guest addresses whose loads and stores are routed through a host handler,
+// for data a project moves elsewhere (e.g. arrays it widens). Only the listed
+// functions pay for the check, unless allFunctions is set to find the rest.
+struct AddressRemap {
+  std::string handler;  // u32 handler(u32 ea, const char* function, bool listed)
+  std::vector<std::pair<uint32_t, uint32_t>> ranges;  // [start, end)
+  std::unordered_set<uint32_t> functions;
+  bool allFunctions = false;
+
+  bool enabled() const { return !handler.empty() && !ranges.empty(); }
 };
 
 // Unified function/chunk configuration
@@ -113,6 +126,7 @@ struct RecompilerConfig {
   std::unordered_map<uint32_t, MidAsmHook> midAsmHooks;
   uint32_t longJmpAddress = 0;
   uint32_t setJmpAddress = 0;
+  AddressRemap addressRemap;
 
   // === rexcrt: CRT function address overrides ===
   // Maps function name -> guest address (e.g. "CreateFileA" -> 0x8248B780)

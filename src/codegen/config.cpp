@@ -152,6 +152,33 @@ void ApplyToml(const toml::table& toml, RecompilerConfig& cfg, const std::string
     }
   }
 
+  // [address_remap]: scalars last wins, ranges and functions additive
+  if (auto* remap = toml["address_remap"].as_table()) {
+    auto& ar = cfg.addressRemap;
+    if (auto v = (*remap)["handler"].value<std::string>())
+      MergeScalar(ar.handler, *v, "address_remap.handler");
+    if (auto v = (*remap)["all_functions"].value<bool>())
+      ar.allFunctions = *v;
+    if (auto* ranges = (*remap)["ranges"].as_array()) {
+      for (auto& entry : *ranges) {
+        auto* pair = entry.as_array();
+        auto start = pair && pair->size() == 2 ? (*pair)[0].value<int64_t>() : std::nullopt;
+        auto end = pair && pair->size() == 2 ? (*pair)[1].value<int64_t>() : std::nullopt;
+        if (!start || !end || *end <= *start) {
+          REXCODEGEN_ERROR("Invalid [address_remap] range in {}: expected [start, end]", filePath);
+          continue;
+        }
+        ar.ranges.emplace_back(static_cast<uint32_t>(*start), static_cast<uint32_t>(*end));
+      }
+    }
+    if (auto* functions = (*remap)["functions"].as_array()) {
+      for (auto& entry : *functions) {
+        if (auto addr = entry.value<int64_t>())
+          ar.functions.insert(static_cast<uint32_t>(*addr));
+      }
+    }
+  }
+
   // --- Keyed tables: additive, same key = last wins ---
 
   // [rexcrt]

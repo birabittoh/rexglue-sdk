@@ -91,7 +91,18 @@ nlohmann::json buildTemplateData(const rex::codegen::CodegenContext& ctx,
       {"non_volatile_as_local", cfg.nonVolatileRegistersAsLocalVariables},
   };
 
+  nlohmann::json addressRemap = nullptr;
+  if (cfg.addressRemap.enabled()) {
+    nlohmann::json ranges = nlohmann::json::array();
+    for (const auto& [start, end] : cfg.addressRemap.ranges) {
+      ranges.push_back({{"start", fmt::format("0x{:08X}", start)},
+                        {"size", fmt::format("0x{:X}", end - start)}});
+    }
+    addressRemap = {{"handler", cfg.addressRemap.handler}, {"ranges", ranges}};
+  }
+
   return {
+      {"address_remap", addressRemap},
       {"project", cfg.projectName},
       {"image_base", fmt::format("0x{:X}", ctx.binary().baseAddress())},
       {"image_size", fmt::format("0x{:X}", ctx.binary().imageSize())},
