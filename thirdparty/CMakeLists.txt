@@ -685,6 +685,8 @@ add_library(libavcodec STATIC
     ${FFMPEG_DIR}/libavcodec/dct32_fixed.c
     ${FFMPEG_DIR}/libavcodec/rdft.c
     ${FFMPEG_DIR}/libavcodec/aactab.c
+    ${FFMPEG_DIR}/libavcodec/atrac.c
+    ${FFMPEG_DIR}/libavcodec/atrac3.c
     ${FFMPEG_DIR}/libavcodec/null_bsf.c
     ${FFMPEG_DIR}/libavcodec/pthread.c
     ${FFMPEG_DIR}/libavcodec/pthread_slice.c

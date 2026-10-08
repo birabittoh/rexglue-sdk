@@ -3,6 +3,7 @@
 
 add_library(rexaudio OBJECT
     
+    atrac3.cpp
     audio_driver.cpp
     audio_system.cpp
     downmix.cpp

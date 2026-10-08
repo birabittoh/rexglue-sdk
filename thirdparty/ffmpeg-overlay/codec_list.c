@@ -11,6 +11,8 @@ static const AVCodec* const codec_list[] = {
 #if CONFIG_WMAV2_DECODER
     &ff_wmav2_decoder,
 #endif
+// Unguarded: the vendored configs leave CONFIG_ATRAC3_DECODER at 0.
+    &ff_atrac3_decoder,
 #if CONFIG_XMAFRAMES_DECODER
     &ff_xmaframes_decoder,
 #endif
