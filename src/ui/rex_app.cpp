@@ -644,7 +644,7 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
           debug_overlay_->SetShowPerfCounters(debug_overlay_show_perf_counters_);
         }
       },
-      [this] { return static_cast<bool>(debug_overlay_); }, "Debug##overlay");
+      [this] { return static_cast<bool>(debug_overlay_); }, "Debug###overlay_debug");
   rex::ui::RegisterBind(
       "bind_console", "Backtick", "Toggle console overlay",
       [this] {
@@ -654,7 +654,7 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
           console_overlay_ = std::make_unique<ui::ConsoleDialog>(imgui_drawer_.get(), log_sink_);
         }
       },
-      [this] { return static_cast<bool>(console_overlay_); }, "Console##rex");
+      [this] { return static_cast<bool>(console_overlay_); }, "Console###rex_console");
   rex::ui::RegisterBind(
       "bind_settings", "F4", "Toggle settings overlay",
       [this] {
@@ -700,7 +700,7 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
         return mod_manager_overlay_ &&
                static_cast<ui::ModManagerDialog*>(mod_manager_overlay_.get())->IsVisible();
       },
-      "Mods##overlay");
+      "Mods###overlay_mods");
   rex::ui::RegisterBind(
       "bind_achievements", "F7", "Toggle achievements overlay",
       [this] {
@@ -710,7 +710,8 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
           achievements_overlay_ = CreateAchievementsOverlay();
         }
       },
-      [this] { return static_cast<bool>(achievements_overlay_); }, "Achievements##overlay");
+      [this] { return static_cast<bool>(achievements_overlay_); },
+      "Achievements###overlay_achievements");
   rex::ui::RegisterBind(
       "bind_renderdoc_capture", "F10", "Capture the next guest-rendered frame with RenderDoc",
       [this] {
@@ -872,7 +873,8 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
           shader_debugger_overlay_->SetOnClose([this] { shader_debugger_overlay_.release(); });
         }
       },
-      [this] { return static_cast<bool>(shader_debugger_overlay_); }, "Shader Debugger");
+      [this] { return static_cast<bool>(shader_debugger_overlay_); },
+      "Shader Debugger###shader_debugger");
 
   // Gamepad-driven mode controller (Gameplay <-> UI, see gamepad_ui.h).
   // Constructed alongside overlay_menu_ so it's always live for the whole

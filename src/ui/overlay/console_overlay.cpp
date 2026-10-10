@@ -10,6 +10,7 @@
  *              See LICENSE file in the project root for full license text.
  */
 #include <rex/ui/overlay/console_overlay.h>
+#include <rex/ui/ui_text.h>
 #include <rex/cvar.h>
 #include <rex/ui/imgui_widgets.h>
 #include <imgui.h>
@@ -257,7 +258,7 @@ void ConsoleDialog::OnDraw(ImGuiIO& io) {
   ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
                            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar;
 
-  if (!ImGui::Begin("Console##rex", nullptr, flags)) {
+  if (!ImGui::Begin(UiLabel("console_title", "Console", "rex_console").c_str(), nullptr, flags)) {
     ImGui::End();
     return;
   }
@@ -271,12 +272,12 @@ void ConsoleDialog::OnDraw(ImGuiIO& io) {
 
   // --- Filter bar ---
   static const char* kLevelNames[] = {"trace", "debug", "info", "warn", "error", "critical"};
-  ImGui::Text("Level:");
+  ImGui::Text("%s", UiText("console_level", "Level:"));
   ImGui::SameLine();
   ImGui::SetNextItemWidth(80.0f);
   ImGui::Combo("##lvl", &min_level_, kLevelNames, 6);
   ImGui::SameLine();
-  ImGui::Text("Categories:");
+  ImGui::Text("%s", UiText("console_categories", "Categories:"));
   ImGui::SameLine();
   int cat_idx = 0;
   for (auto& [cat_name, enabled] : category_filter_) {

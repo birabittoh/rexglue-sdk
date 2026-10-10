@@ -9,6 +9,7 @@
  *              See LICENSE file in the project root for full license text.
  */
 #include <rex/ui/overlay/achievements_overlay.h>
+#include <rex/ui/ui_text.h>
 
 #include <algorithm>
 
@@ -101,7 +102,8 @@ void AchievementsOverlayDialog::OnDraw(ImGuiIO& io) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, style.window_padding);
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, style.item_spacing);
 
-  if (ImGui::Begin("Achievements##overlay", nullptr, ImGuiWindowFlags_NoCollapse)) {
+  if (ImGui::Begin(UiLabel("achievements_title", "Achievements", "overlay_achievements").c_str(),
+                   nullptr, ImGuiWindowFlags_NoCollapse)) {
     const auto achievements = achievements_->ListAchievements();
 
     int unlocked_count = 0;
@@ -122,8 +124,9 @@ void AchievementsOverlayDialog::OnDraw(ImGuiIO& io) {
     const std::string gs_text = fmt::format("{}G / {}G", earned_gs, total_gs);
     const float gs_text_width = ImGui::CalcTextSize(gs_text.c_str()).x;
 
-    TextBoldColored(header_draw_list, style.header_text,
-                    fmt::format("{} / {} unlocked", unlocked_count, total_count));
+    TextBoldColored(
+        header_draw_list, style.header_text,
+        UiTextFormat("achievements_unlocked", "%d / %d unlocked", unlocked_count, total_count));
     ImGui::SameLine(header_row_width - gs_text_width);
     TextBoldColored(header_draw_list, style.badge_gamerscore, gs_text);
 
@@ -181,7 +184,8 @@ void AchievementsOverlayDialog::OnDraw(ImGuiIO& io) {
       TextBoldColored(draw_list, style.badge_gamerscore, fmt::format("{}G", a.gamerscore));
       ImGui::SameLine();
       if (show_hidden) {
-        TextBoldColored(draw_list, style.locked_title, "Hidden Achievement");
+        TextBoldColored(draw_list, style.locked_title,
+                        UiText("achievements_hidden", "Hidden Achievement"));
       } else {
         TextBoldColored(draw_list, is_unlocked ? unlocked_title : style.locked_title, a.label);
       }
@@ -206,7 +210,7 @@ void AchievementsOverlayDialog::OnDraw(ImGuiIO& io) {
         }
         ImGui::BeginGroup();
         bool checked = revealed;
-        if (ImGui::Checkbox("Reveal", &checked)) {
+        if (ImGui::Checkbox(UiText("achievements_reveal", "Reveal"), &checked)) {
           if (checked) {
             revealed_secrets_.insert(a.id);
           } else {

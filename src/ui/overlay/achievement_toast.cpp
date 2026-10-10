@@ -9,6 +9,7 @@
  *              See LICENSE file in the project root for full license text.
  */
 #include <rex/ui/overlay/achievement_toast.h>
+#include <rex/ui/ui_text.h>
 #include <imgui.h>
 
 #include <algorithm>
@@ -85,7 +86,7 @@ void AchievementToastDialog::OnDraw(ImGuiIO& io) {
 
     ImGui::BeginGroup();
     ImGui::PushStyleColor(ImGuiCol_Text, faded(s.title));
-    ImGui::TextUnformatted("Achievement Unlocked");
+    ImGui::TextUnformatted(UiText("achievement_unlocked", "Achievement Unlocked"));
     ImGui::PopStyleColor();
     ImGui::TextUnformatted(toast.event.achievement.label.c_str());
     ImGui::SameLine();

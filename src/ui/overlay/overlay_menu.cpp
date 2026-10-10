@@ -9,6 +9,7 @@
  *              See LICENSE file in the project root for full license text.
  */
 #include <rex/ui/overlay/overlay_menu.h>
+#include <rex/ui/ui_text.h>
 
 #include <algorithm>
 #include <vector>
@@ -35,7 +36,8 @@ bool IsOwnBind(std::string_view name) {
 // the ImGui::Begin call in OnDraw so the gamepad UI controller (see
 // gamepad_ui.h) can focus/move/resize/close this window like any other
 // overlay's.
-constexpr const char* kWindowTitle = "Overlays##overlay_menu";
+// The bind registers this exact string; ImGui matches windows by the id after ###.
+constexpr const char* kWindowTitle = "Overlays###overlay_menu";
 
 OverlayMenuDialog::OverlayMenuDialog(ImGuiDrawer* imgui_drawer, rex::Runtime* runtime)
     : ImGuiDialog(imgui_drawer), runtime_(runtime) {
@@ -91,7 +93,8 @@ void OverlayMenuDialog::OnDraw(ImGuiIO& io) {
   ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), io.DisplaySize);
   ImGui::SetNextWindowSize(ImVec2(std::min(420.0f, io.DisplaySize.x), 0.0f),
                            ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin(kWindowTitle, &visible_, ImGuiWindowFlags_AlwaysAutoResize)) {
+  if (!ImGui::Begin(UiLabel("overlays_title", "Overlays", "overlay_menu").c_str(), &visible_,
+                    ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::End();
     return;
   }
@@ -110,15 +113,20 @@ void OverlayMenuDialog::OnDraw(ImGuiIO& io) {
 
   bool any = false;
   for (const auto& owner : owners_order) {
-    ImGui::TextColored(kMutedText, "%s", owner.empty() ? "Base app" : owner.c_str());
+    ImGui::TextColored(kMutedText, "%s",
+                       owner.empty() ? UiText("overlays_base_app", "Base app") : owner.c_str());
     for (const auto& bind : binds) {
       if (!bind.has_visibility_state || bind.owner != owner || IsOwnBind(bind.name)) {
         continue;
       }
       any = true;
       ImGui::PushID(bind.name.c_str());
-      std::string label = (bind.description.empty() ? bind.name : bind.description) +
-                          (bind.visible ? "  [shown]" : "  [hidden]");
+      // The bind's name doubles as the translation key for its description.
+      std::string label = (bind.description.empty()
+                               ? bind.name
+                               : std::string(UiText(bind.name.c_str(), bind.description.c_str()))) +
+                          (bind.visible ? UiText("overlays_shown", "  [shown]")
+                                        : UiText("overlays_hidden", "  [hidden]"));
       if (bind.visible) {
         ImGui::PushStyleColor(ImGuiCol_Text, kShownText);
       }
@@ -137,8 +145,9 @@ void OverlayMenuDialog::OnDraw(ImGuiIO& io) {
     }
   }
   if (!any) {
-    ImGui::TextDisabled(
-        "No overlays expose visibility state yet (RegisterBind's is_visible parameter).");
+    ImGui::TextDisabled("%s", UiText("overlays_none",
+                                     "No overlays expose visibility state yet (RegisterBind's "
+                                     "is_visible parameter)."));
   }
 
   ImGui::End();

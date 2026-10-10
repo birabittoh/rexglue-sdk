@@ -10,6 +10,7 @@
  *              See LICENSE file in the project root for full license text.
  */
 #include <rex/ui/overlay/debug_overlay.h>
+#include <rex/ui/ui_text.h>
 #include <rex/version.h>
 #include <imgui.h>
 #ifdef REXGLUE_ENABLE_PERF_COUNTERS
@@ -35,24 +36,28 @@ void DebugOverlayDialog::OnDraw(ImGuiIO& io) {
   ImGui::SetNextWindowSize(ImVec2(220, 160), ImGuiCond_FirstUseEver);
 #endif
   ImGui::SetNextWindowBgAlpha(0.5f);
-  if (ImGui::Begin("Debug##overlay", nullptr, ImGuiWindowFlags_NoCollapse)) {
-    ImGui::Text("Host: %.1f FPS (%.2f ms)", io.Framerate,
-                io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f);
+  if (ImGui::Begin(UiLabel("debug_title", "Debug", "overlay_debug").c_str(), nullptr,
+                   ImGuiWindowFlags_NoCollapse)) {
+    ImGui::Text("%s", UiTextFormat("debug_host", "Host: %.1f FPS (%.2f ms)", io.Framerate,
+                                   io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f)
+                          .c_str());
     host_fps_history_[host_fps_history_idx_] = io.Framerate;
     host_fps_history_idx_ = (host_fps_history_idx_ + 1) % kFpsHistorySize;
     ImGui::PlotLines("##hostfps", host_fps_history_.data(), static_cast<int>(kFpsHistorySize),
-                     static_cast<int>(host_fps_history_idx_), "Host FPS", 0.0f, 150.0f,
-                     ImVec2(200, 40));
+                     static_cast<int>(host_fps_history_idx_), UiText("debug_host_fps", "Host FPS"),
+                     0.0f, 150.0f, ImVec2(200, 40));
 
     if (stats_provider_) {
       auto stats = stats_provider_();
       if (stats.frame_count > 0) {
-        ImGui::Text("Guest: %.1f FPS (%.2f ms)", stats.fps, stats.frame_time_ms);
+        ImGui::Text("%s", UiTextFormat("debug_guest", "Guest: %.1f FPS (%.2f ms)", stats.fps,
+                                       stats.frame_time_ms)
+                              .c_str());
         guest_fps_history_[guest_fps_history_idx_] = static_cast<float>(stats.fps);
         guest_fps_history_idx_ = (guest_fps_history_idx_ + 1) % kFpsHistorySize;
         ImGui::PlotLines("##guestfps", guest_fps_history_.data(), static_cast<int>(kFpsHistorySize),
-                         static_cast<int>(guest_fps_history_idx_), "Guest FPS", 0.0f, 150.0f,
-                         ImVec2(200, 40));
+                         static_cast<int>(guest_fps_history_idx_),
+                         UiText("debug_guest_fps", "Guest FPS"), 0.0f, 150.0f, ImVec2(200, 40));
       }
     }
 
@@ -70,8 +75,8 @@ void DebugOverlayDialog::OnDraw(ImGuiIO& io) {
       frame_time_history_[frame_history_idx_] = ft_ms;
       frame_history_idx_ = (frame_history_idx_ + 1) % kFrameHistorySize;
       ImGui::PlotLines("##ft", frame_time_history_.data(), kFrameHistorySize,
-                       static_cast<int>(frame_history_idx_), "Frame (ms)", 0.0f, 50.0f,
-                       ImVec2(200, 40));
+                       static_cast<int>(frame_history_idx_), UiText("debug_frame_ms", "Frame (ms)"),
+                       0.0f, 50.0f, ImVec2(200, 40));
 
       // GPU
       ImGui::Text("Draw: %" PRId64 "  Stalls: %" PRId64 "  Verts: %" PRId64,

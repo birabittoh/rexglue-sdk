@@ -163,6 +163,12 @@ class ModManagerDialog : public ImGuiDialog {
     bool done = false;
     bool ok = false;
     std::string message;
+    // How a successful install is worded, filled in at draw time so it
+    // follows the interface language.
+    enum class Outcome { kSideloaded, kUpdated, kStaged };
+    Outcome outcome = Outcome::kSideloaded;
+    std::string id;
+    std::string version;
     // Id to focus in the Installed tab once this result is consumed; empty
     // on failure (nothing to focus).
     std::string focus_id;

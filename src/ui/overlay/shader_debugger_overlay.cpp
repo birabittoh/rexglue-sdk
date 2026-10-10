@@ -13,6 +13,7 @@
  *              See LICENSE file in the project root for full license text.
  */
 #include <rex/ui/overlay/shader_debugger_overlay.h>
+#include <rex/ui/ui_text.h>
 
 #include <algorithm>
 #include <cctype>
@@ -479,7 +480,8 @@ void ShaderDebuggerDialog::OnDraw(ImGuiIO& io) {
                           ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
   SetNextWindowFittedSize(io, 900.0f, 620.0f);
   bool open = true;
-  if (!ImGui::Begin("Shader Debugger", &open, ImGuiWindowFlags_NoCollapse)) {
+  if (!ImGui::Begin(UiLabel("shader_title", "Shader Debugger", "shader_debugger").c_str(), &open,
+                    ImGuiWindowFlags_NoCollapse)) {
     ImGui::End();
     if (!open) {
       Close();
@@ -531,18 +533,19 @@ void ShaderDebuggerDialog::DrawShaderTable() {
       ++disabled_count;
     }
   }
-  ImGui::Text("Shaders: %zu (VS: %zu, PS: %zu)  Disabled: %zu", total, vs_count, ps_count,
-              disabled_count);
+  ImGui::Text("%s", UiTextFormat("shader_summary", "Shaders: %zu (VS: %zu, PS: %zu)  Disabled: %zu",
+                                 total, vs_count, ps_count, disabled_count)
+                        .c_str());
 
   ImGui::Checkbox("VS", &show_vertex_);
   ImGui::SameLine();
   ImGui::Checkbox("PS", &show_pixel_);
   ImGui::SameLine();
-  ImGui::Checkbox("Only active", &show_only_active_);
+  ImGui::Checkbox(UiText("shader_only_active", "Only active"), &show_only_active_);
   ImGui::SameLine();
-  ImGui::Checkbox("Auto-refresh", &auto_refresh_);
+  ImGui::Checkbox(UiText("shader_auto_refresh", "Auto-refresh"), &auto_refresh_);
   ImGui::SameLine();
-  if (ImGui::Button("Refresh")) {
+  if (ImGui::Button(UiText("shader_refresh", "Refresh"))) {
     if (snapshot_provider_) {
       cached_ = snapshot_provider_();
     }
@@ -551,7 +554,7 @@ void ShaderDebuggerDialog::DrawShaderTable() {
     }
   }
 
-  if (ImGui::Button("Enable all")) {
+  if (ImGui::Button(UiText("shader_enable_all", "Enable all"))) {
     for (const auto& e : cached_) {
       if (e.disabled) {
         if (disable_setter_)
@@ -561,7 +564,7 @@ void ShaderDebuggerDialog::DrawShaderTable() {
     }
   }
   ImGui::SameLine();
-  if (ImGui::Button("Disable all visible")) {
+  if (ImGui::Button(UiText("shader_disable_visible", "Disable all visible"))) {
     for (const auto& e : cached_) {
       bool show_type = (e.type == 0 && show_vertex_) || (e.type == 1 && show_pixel_);
       if (!show_type)
@@ -578,13 +581,13 @@ void ShaderDebuggerDialog::DrawShaderTable() {
     }
   }
   ImGui::SameLine();
-  if (ImGui::Button("Reset timings")) {
+  if (ImGui::Button(UiText("shader_reset_timings", "Reset timings"))) {
     if (profiling_resetter_)
       profiling_resetter_();
   }
   if (has_selection_) {
     ImGui::SameLine();
-    if (ImGui::Button("Close viewer")) {
+    if (ImGui::Button(UiText("shader_close_viewer", "Close viewer"))) {
       has_selection_ = false;
       selected_hash_ = 0;
       selected_details_ = {};
@@ -593,8 +596,8 @@ void ShaderDebuggerDialog::DrawShaderTable() {
   }
 
   ImGui::SetNextItemWidth(-1.0f);
-  ImGui::InputTextWithHint("##filter", "Filter by hash (hex substring)", filter_buf_,
-                           sizeof(filter_buf_));
+  ImGui::InputTextWithHint("##filter", UiText("shader_filter", "Filter by hash (hex substring)"),
+                           filter_buf_, sizeof(filter_buf_));
 
   ImGui::Separator();
 
@@ -602,15 +605,21 @@ void ShaderDebuggerDialog::DrawShaderTable() {
                         ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY |
                             ImGuiTableFlags_Sortable | ImGuiTableFlags_Resizable)) {
     ImGui::TableSetupScrollFreeze(0, 1);
-    ImGui::TableSetupColumn("Enabled", ImGuiTableColumnFlags_NoSort, 70.0f);
-    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_DefaultSort, 50.0f);
-    ImGui::TableSetupColumn("Hash", ImGuiTableColumnFlags_None, 170.0f);
-    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_None, 140.0f);
-    ImGui::TableSetupColumn("Dwords", ImGuiTableColumnFlags_None, 70.0f);
-    ImGui::TableSetupColumn("Active", ImGuiTableColumnFlags_None, 50.0f);
-    ImGui::TableSetupColumn("Total ms", ImGuiTableColumnFlags_None, 80.0f);
-    ImGui::TableSetupColumn("Draws", ImGuiTableColumnFlags_None, 70.0f);
-    ImGui::TableSetupColumn("Avg us", ImGuiTableColumnFlags_None, 70.0f);
+    ImGui::TableSetupColumn(UiText("shader_col_enabled", "Enabled"), ImGuiTableColumnFlags_NoSort,
+                            70.0f);
+    ImGui::TableSetupColumn(UiText("shader_col_type", "Type"), ImGuiTableColumnFlags_DefaultSort,
+                            50.0f);
+    ImGui::TableSetupColumn(UiText("shader_col_hash", "Hash"), ImGuiTableColumnFlags_None, 170.0f);
+    ImGui::TableSetupColumn(UiText("shader_col_name", "Name"), ImGuiTableColumnFlags_None, 140.0f);
+    ImGui::TableSetupColumn(UiText("shader_col_dwords", "Dwords"), ImGuiTableColumnFlags_None,
+                            70.0f);
+    ImGui::TableSetupColumn(UiText("shader_col_active", "Active"), ImGuiTableColumnFlags_None,
+                            50.0f);
+    ImGui::TableSetupColumn(UiText("shader_col_total_ms", "Total ms"), ImGuiTableColumnFlags_None,
+                            80.0f);
+    ImGui::TableSetupColumn(UiText("shader_col_draws", "Draws"), ImGuiTableColumnFlags_None, 70.0f);
+    ImGui::TableSetupColumn(UiText("shader_col_avg_us", "Avg us"), ImGuiTableColumnFlags_None,
+                            70.0f);
     ImGui::TableHeadersRow();
 
     std::vector<size_t> indices;
@@ -763,9 +772,11 @@ void ShaderDebuggerDialog::DrawShaderTable() {
 
 void ShaderDebuggerDialog::DrawDetailsPanel() {
   if (!selected_details_.found) {
-    ImGui::TextDisabled("Shader %016llx not found (may have been evicted).",
-                        static_cast<unsigned long long>(selected_hash_));
-    if (ImGui::Button("Refresh")) {
+    ImGui::TextDisabled(
+        "%s", UiTextFormat("shader_not_found", "Shader %016llx not found (may have been evicted).",
+                           static_cast<unsigned long long>(selected_hash_))
+                  .c_str());
+    if (ImGui::Button(UiText("shader_refresh", "Refresh"))) {
       RefreshSelectedDetails();
     }
     return;
@@ -775,33 +786,36 @@ void ShaderDebuggerDialog::DrawDetailsPanel() {
   ImGui::Text("%s  %016llx", TypeLabel(info.type),
               static_cast<unsigned long long>(info.ucode_hash));
   ImGui::SameLine();
-  if (ImGui::SmallButton("Copy")) {
+  if (ImGui::SmallButton(UiText("shader_copy", "Copy"))) {
     char buf[24];
     std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(info.ucode_hash));
     ImGui::SetClipboardText(buf);
   }
-  ImGui::Text("Dwords: %u   Translations: %zu   Disabled: %s", info.dword_count,
-              selected_details_.translations.size(), info.disabled ? "yes" : "no");
+  ImGui::Text("%s", UiTextFormat("shader_details", "Dwords: %u   Translations: %zu   Disabled: %s",
+                                 info.dword_count, selected_details_.translations.size(),
+                                 info.disabled ? UiText("yes", "yes") : UiText("no", "no"))
+                        .c_str());
 
   // Rename / documentation label. Hitting Enter or pressing the Save button
   // writes the new name into shader_names_ and persists shaders.toml.
   ImGui::SetNextItemWidth(260.0f);
-  bool committed =
-      ImGui::InputTextWithHint("##rename", "Documentation name", rename_buf_, sizeof(rename_buf_),
-                               ImGuiInputTextFlags_EnterReturnsTrue);
+  bool committed = ImGui::InputTextWithHint(
+      "##rename", UiText("shader_doc_name", "Documentation name"), rename_buf_, sizeof(rename_buf_),
+      ImGuiInputTextFlags_EnterReturnsTrue);
   ImGui::SameLine();
-  if (ImGui::Button("Save name") || committed) {
+  if (ImGui::Button(UiText("shader_save_name", "Save name")) || committed) {
     SetName(selected_hash_, std::string(rename_buf_));
-    status_message_ = rename_buf_[0] ? "Saved name." : "Cleared name.";
+    status_message_ = rename_buf_[0] ? UiText("shader_saved_name", "Saved name.")
+                                     : UiText("shader_cleared_name", "Cleared name.");
   }
   ImGui::SameLine();
-  if (ImGui::Button("Clear name")) {
+  if (ImGui::Button(UiText("shader_clear_name", "Clear name"))) {
     rename_buf_[0] = '\0';
     SetName(selected_hash_, std::string{});
-    status_message_ = "Cleared name.";
+    status_message_ = UiText("shader_cleared_name", "Cleared name.");
   }
 
-  if (ImGui::Button("Refresh details")) {
+  if (ImGui::Button(UiText("shader_refresh_details", "Refresh details"))) {
     RefreshSelectedDetails();
   }
 
@@ -811,7 +825,9 @@ void ShaderDebuggerDialog::DrawDetailsPanel() {
 
   ImGui::Separator();
 
-  if (ImGui::CollapsingHeader("Microcode disassembly", ImGuiTreeNodeFlags_DefaultOpen)) {
+  if (ImGui::CollapsingHeader(
+          UiLabel("shader_microcode", "Microcode disassembly", "microcode").c_str(),
+          ImGuiTreeNodeFlags_DefaultOpen)) {
     // Read-only multiline view of the Xenos disassembly.
     ImVec2 size(-1.0f, 180.0f);
     ImGui::InputTextMultiline(
@@ -821,26 +837,30 @@ void ShaderDebuggerDialog::DrawDetailsPanel() {
   }
 
   if (selected_details_.translations.empty()) {
-    ImGui::TextDisabled("No host translations have been built yet.");
+    ImGui::TextDisabled(
+        "%s", UiText("shader_no_translations", "No host translations have been built yet."));
     return;
   }
 
-  if (ImGui::CollapsingHeader("Host translation editor", ImGuiTreeNodeFlags_DefaultOpen)) {
+  if (ImGui::CollapsingHeader(
+          UiLabel("shader_host_editor", "Host translation editor", "host_editor").c_str(),
+          ImGuiTreeNodeFlags_DefaultOpen)) {
     // Translation selector combo.
-    char preview[80];
-    std::snprintf(preview, sizeof(preview), "Modification %d (mod=0x%016llx)",
-                  selected_translation_idx_,
-                  static_cast<unsigned long long>(
-                      selected_details_.translations[selected_translation_idx_].modification));
-    if (ImGui::BeginCombo("##translation", preview)) {
+    const std::string preview = UiTextFormat(
+        "shader_modification", "Modification %d (mod=0x%016llx)", selected_translation_idx_,
+        static_cast<unsigned long long>(
+            selected_details_.translations[selected_translation_idx_].modification));
+    if (ImGui::BeginCombo("##translation", preview.c_str())) {
       for (int i = 0; i < static_cast<int>(selected_details_.translations.size()); ++i) {
         const auto& tr = selected_details_.translations[i];
-        char label[96];
-        std::snprintf(label, sizeof(label), "#%d  mod=0x%016llx  %s%s", i,
-                      static_cast<unsigned long long>(tr.modification),
-                      tr.is_translated ? "translated" : "pending", tr.is_valid ? "" : ", invalid");
+        const std::string label =
+            UiTextFormat("shader_translation_row", "#%d  mod=0x%016llx  %s%s", i,
+                         static_cast<unsigned long long>(tr.modification),
+                         tr.is_translated ? UiText("shader_translated", "translated")
+                                          : UiText("shader_pending", "pending"),
+                         tr.is_valid ? "" : UiText("shader_invalid_suffix", ", invalid"));
         bool sel = (i == selected_translation_idx_);
-        if (ImGui::Selectable(label, sel)) {
+        if (ImGui::Selectable(label.c_str(), sel)) {
           selected_translation_idx_ = i;
           LoadEditBuffer(edit_buffer_, tr.host_disassembly);
           status_message_.clear();
@@ -852,13 +872,19 @@ void ShaderDebuggerDialog::DrawDetailsPanel() {
     }
 
     const auto& tr = selected_details_.translations[selected_translation_idx_];
-    ImGui::Text("Translated binary: %zu bytes  (%s, %s)", tr.translated_binary.size(),
-                tr.is_translated ? "translated" : "pending", tr.is_valid ? "valid" : "INVALID");
+    ImGui::Text("%s", UiTextFormat("shader_binary", "Translated binary: %zu bytes  (%s, %s)",
+                                   tr.translated_binary.size(),
+                                   tr.is_translated ? UiText("shader_translated", "translated")
+                                                    : UiText("shader_pending", "pending"),
+                                   tr.is_valid ? UiText("shader_valid", "valid")
+                                               : UiText("shader_invalid", "INVALID"))
+                          .c_str());
 
     // Editor for the host disassembly text. This text is informational --
     // editing it does not retranslate the shader. To make changes effective,
     // use the binary replace controls below.
-    ImGui::TextDisabled("Host disassembly (editable note buffer):");
+    ImGui::TextDisabled("%s",
+                        UiText("shader_host_disasm", "Host disassembly (editable note buffer):"));
     if (edit_buffer_.empty()) {
       LoadEditBuffer(edit_buffer_, tr.host_disassembly);
     }
@@ -866,54 +892,62 @@ void ShaderDebuggerDialog::DrawDetailsPanel() {
                               ImVec2(-1.0f, 200.0f));
 
     ImGui::Separator();
-    ImGui::TextDisabled(
-        "Runtime replacement: dump the binary, edit/recompile externally, then load it back.");
+    ImGui::TextDisabled("%s", UiText("shader_replacement",
+                                     "Runtime replacement: dump the binary, edit/recompile "
+                                     "externally, then load it back."));
 
     ImGui::SetNextItemWidth(-160.0f);
-    ImGui::InputTextWithHint("##binpath", "Path to .bin (DXBC/DXIL/SPIR-V/...)", binary_path_buf_,
-                             sizeof(binary_path_buf_));
+    ImGui::InputTextWithHint("##binpath",
+                             UiText("shader_bin_path", "Path to .bin (DXBC/DXIL/SPIR-V/...)"),
+                             binary_path_buf_, sizeof(binary_path_buf_));
     ImGui::SameLine();
-    if (ImGui::Button("Save binary...")) {
+    if (ImGui::Button(UiText("shader_save_binary", "Save binary..."))) {
       const char* path = binary_path_buf_;
       if (!path[0]) {
-        status_message_ = "Enter a target file path first.";
+        status_message_ = UiText("shader_need_target", "Enter a target file path first.");
       } else {
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
         if (!out) {
-          status_message_ = std::string("Failed to open ") + path + " for writing.";
+          status_message_ =
+              UiTextFormat("shader_open_write", "Failed to open %s for writing.", path);
         } else {
           if (!tr.translated_binary.empty()) {
             out.write(reinterpret_cast<const char*>(tr.translated_binary.data()),
                       static_cast<std::streamsize>(tr.translated_binary.size()));
           }
-          status_message_ =
-              "Wrote " + std::to_string(tr.translated_binary.size()) + " bytes to " + path;
+          status_message_ = UiTextFormat("shader_wrote", "Wrote %zu bytes to %s",
+                                         tr.translated_binary.size(), path);
         }
       }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Load binary...")) {
+    if (ImGui::Button(UiText("shader_load_binary", "Load binary..."))) {
       const char* path = binary_path_buf_;
       if (!path[0]) {
-        status_message_ = "Enter a source file path first.";
+        status_message_ = UiText("shader_need_source", "Enter a source file path first.");
       } else if (!binary_replacer_) {
-        status_message_ = "Backend does not support binary replacement.";
+        status_message_ =
+            UiText("shader_no_replacement", "Backend does not support binary replacement.");
       } else {
         std::ifstream in(path, std::ios::binary);
         if (!in) {
-          status_message_ = std::string("Failed to open ") + path + " for reading.";
+          status_message_ =
+              UiTextFormat("shader_open_read", "Failed to open %s for reading.", path);
         } else {
           std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)),
                                      std::istreambuf_iterator<char>());
           size_t n = bytes.size();
           bool ok = binary_replacer_(selected_hash_, tr.modification, std::move(bytes));
           if (ok) {
-            status_message_ = "Queued replacement of " + std::to_string(n) +
-                              " bytes; pipelines will rebuild on next draw.";
+            status_message_ = UiTextFormat("shader_queued",
+                                           "Queued replacement of %zu bytes; pipelines will "
+                                           "rebuild on next draw.",
+                                           n);
             // Re-query so the new size is reflected promptly.
             RefreshSelectedDetails();
           } else {
-            status_message_ = "Replacement failed (shader/translation no longer present).";
+            status_message_ = UiText("shader_replace_failed",
+                                     "Replacement failed (shader/translation no longer present).");
           }
         }
       }

@@ -16,6 +16,7 @@ set(REXUI_CORE_SOURCES
     progress_window.cpp
     renderdoc_api.cpp
     sdl_virtual_key.cpp
+    ui_text.cpp
     window.cpp
     window_sdl.cpp
     windowed_app.cpp

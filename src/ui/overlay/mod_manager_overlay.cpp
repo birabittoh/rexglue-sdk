@@ -30,6 +30,7 @@
 #include <rex/ui/image_decode.h>
 #include <rex/ui/immediate_drawer.h>
 #include <rex/ui/keybinds.h>
+#include <rex/ui/ui_text.h>
 #include <rex/ui/window.h>
 
 namespace rex::ui {
@@ -202,12 +203,11 @@ void ModManagerDialog::SideloadArchive(std::filesystem::path zip_path) {
     sideload_result_.done = true;
     sideload_result_.ok = result.has_value();
     if (result) {
-      sideload_result_.message = (result->staged    ? "Downloaded update for \""
-                                  : result->updated ? "Updated \""
-                                                    : "Sideloaded \"") +
-                                 result->id + "\"" +
-                                 (result->version.empty() ? "" : " (v" + result->version + ")") +
-                                 (result->staged ? "; restart to apply" : "");
+      sideload_result_.outcome = result->staged    ? SideloadResult::Outcome::kStaged
+                                 : result->updated ? SideloadResult::Outcome::kUpdated
+                                                   : SideloadResult::Outcome::kSideloaded;
+      sideload_result_.version = result->version;
+      sideload_result_.id = result->id;
       sideload_result_.focus_id = result->id;
     } else {
       sideload_result_.message = error;
@@ -315,22 +315,23 @@ void ModManagerDialog::OnDraw(ImGuiIO& io) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 6.0f));
 
-  if (ImGui::Begin("Mods##overlay", nullptr, ImGuiWindowFlags_NoCollapse)) {
+  if (ImGui::Begin(UiLabel("mods_title", "Mods", "overlay_mods").c_str(), nullptr,
+                   ImGuiWindowFlags_NoCollapse)) {
     DrawRestartBanner();
 
     if (ImGui::BeginTabBar("##modtabs")) {
-      if (ImGui::BeginTabItem("Installed")) {
+      if (ImGui::BeginTabItem(UiLabel("tab_installed", "Installed", "tab_installed").c_str())) {
         DrawInstalledTab();
         ImGui::EndTabItem();
       }
       if (catalog_.state() == rex::system::CatalogState::kReady) {
-        if (ImGui::BeginTabItem("All")) {
+        if (ImGui::BeginTabItem(UiLabel("tab_all", "All", "tab_all").c_str())) {
           DrawCatalogTab();
           ImGui::EndTabItem();
         }
       } else if (catalog_.state() == rex::system::CatalogState::kLoading) {
-        if (ImGui::BeginTabItem("All")) {
-          ImGui::TextDisabled("Loading catalog...");
+        if (ImGui::BeginTabItem(UiLabel("tab_all", "All", "tab_all").c_str())) {
+          ImGui::TextDisabled("%s", UiText("loading_catalog", "Loading catalog..."));
           ImGui::EndTabItem();
         }
       }
@@ -347,10 +348,12 @@ void ModManagerDialog::DrawRestartBanner() {
   if (!StateDiffersFromStartup() && !has_pending_updates_)
     return;
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.2f, 1.0f));
-  ImGui::TextWrapped("Mod changes require a restart to take effect.");
+  ImGui::TextWrapped("%s",
+                     UiText("restart_required", "Mod changes require a restart to take effect."));
   ImGui::PopStyleColor();
   ImGui::SameLine();
-  if (ImGui::SmallButton(has_pending_updates_ ? "Restart & Apply" : "Restart Now")) {
+  if (ImGui::SmallButton(has_pending_updates_ ? UiText("restart_apply", "Restart & Apply")
+                                              : UiText("restart_now", "Restart Now"))) {
     // This draws on the guest thread. RequestClose runs OnClosing inline,
     // whose TerminateTitle then self-terminates the calling guest thread
     // before the hard exit, leaving the old process alive.
@@ -374,11 +377,27 @@ void ModManagerDialog::DrawInstalledTab() {
       sideload_result_.focus_id.clear();
     }
     if (sideload_snapshot.in_progress) {
-      ImGui::TextColored(kMutedText, "Installing dropped mod...");
+      ImGui::TextColored(kMutedText, "%s",
+                         UiText("installing_dropped", "Installing dropped mod..."));
       ImGui::Separator();
     } else if (sideload_snapshot.done) {
-      ImGui::TextColored(sideload_snapshot.ok ? kUpdateBadge : kErrorBadge, "%s",
-                         sideload_snapshot.message.c_str());
+      std::string message = sideload_snapshot.message;
+      if (sideload_snapshot.ok) {
+        using Outcome = SideloadResult::Outcome;
+        const char* id = sideload_snapshot.id.c_str();
+        message = sideload_snapshot.outcome == Outcome::kStaged
+                      ? UiTextFormat("sideload_staged", "Downloaded update for \"%s\"", id)
+                  : sideload_snapshot.outcome == Outcome::kUpdated
+                      ? UiTextFormat("sideload_updated", "Updated \"%s\"", id)
+                      : UiTextFormat("sideload_installed", "Sideloaded \"%s\"", id);
+        if (!sideload_snapshot.version.empty()) {
+          message += " (v" + sideload_snapshot.version + ")";
+        }
+        if (sideload_snapshot.outcome == Outcome::kStaged) {
+          message += UiText("sideload_restart", "; restart to apply");
+        }
+      }
+      ImGui::TextColored(sideload_snapshot.ok ? kUpdateBadge : kErrorBadge, "%s", message.c_str());
       ImGui::Separator();
     }
     if (sideload_snapshot.ok && !sideload_snapshot.focus_id.empty()) {
@@ -387,23 +406,23 @@ void ModManagerDialog::DrawInstalledTab() {
     }
   }
 
-  if (ImGui::SmallButton("Auto-sort")) {
+  if (ImGui::SmallButton(UiText("auto_sort", "Auto-sort"))) {
     entries_ = rex::system::ModState::AutoSort(entries_, manifests_);
     PersistAndRevalidate();
   }
   ImGui::SameLine();
-  if (ImGui::SmallButton("Refresh from disk")) {
+  if (ImGui::SmallButton(UiText("refresh_disk", "Refresh from disk"))) {
     ReloadFromDisk();
   }
   ImGui::SameLine();
-  if (ImGui::SmallButton("Open Mods Folder")) {
+  if (ImGui::SmallButton(UiText("open_folder", "Open Mods Folder"))) {
     rex::platform::process::OpenFolder(mods_root_);
   }
   // Same visibility condition as DrawRestartBanner; only worth offering a
   // reset once there's actually something to reset back to what's running.
   if (runtime_ && (StateDiffersFromStartup() || has_pending_updates_)) {
     ImGui::SameLine();
-    if (ImGui::SmallButton("Reset")) {
+    if (ImGui::SmallButton(UiText("reset", "Reset"))) {
       // Restore by id rather than replacing entries_ wholesale: a mod
       // installed (or updated in place; same id, so this still finds it)
       // since startup has no entry in ModStateAtStartup() at all, and a
@@ -445,21 +464,29 @@ void ModManagerDialog::DrawInstalledTab() {
       ReloadFromDisk();
     }
     if (ImGui::IsItemHovered()) {
-      ImGui::SetTooltip("Restore enable/disable state and load order to what's currently running.");
+      ImGui::SetTooltip(
+          "%s", UiText("reset_tip",
+                       "Restore enable/disable state and load order to what's currently running."));
     }
   }
   ImGui::SameLine();
-  ImGui::TextColored(kMutedText, "%zu mod%s installed; earlier entries win conflicts",
-                     entries_.size(), entries_.size() == 1 ? "" : "s");
+  ImGui::TextColored(
+      kMutedText, "%s",
+      (entries_.size() == 1
+           ? UiTextFormat("installed_one", "%zu mod installed; earlier entries win conflicts",
+                          entries_.size())
+           : UiTextFormat("installed_many", "%zu mods installed; earlier entries win conflicts",
+                          entries_.size()))
+          .c_str());
 
   ImGui::SetNextItemWidth(-1.0f);
-  ImGui::InputTextWithHint("##installedfilter", "Filter mods...", installed_filter_buf_,
-                           sizeof(installed_filter_buf_));
+  ImGui::InputTextWithHint("##installedfilter", UiText("filter_mods", "Filter mods..."),
+                           installed_filter_buf_, sizeof(installed_filter_buf_));
   const std::string installed_filter(installed_filter_buf_);
   ImGui::Separator();
 
   if (entries_.empty()) {
-    ImGui::TextDisabled("No mods installed.");
+    ImGui::TextDisabled("%s", UiText("no_mods", "No mods installed."));
   }
 
   auto issues_for = [&](const std::string& id) {
@@ -641,7 +668,7 @@ void ModManagerDialog::DrawInstalledTab() {
     }
     ImGui::EndDisabled();  // pending_removal
     if (pending_removal) {
-      if (ImGui::SmallButton("Restore")) {
+      if (ImGui::SmallButton(UiText("restore", "Restore"))) {
         rex::system::ModState::UnmarkPendingRemoval(mods_root_, entry.id);
         ReloadFromDisk();
         list_changed = true;
@@ -652,7 +679,7 @@ void ModManagerDialog::DrawInstalledTab() {
       // loaded mod DLL, since nothing is deleted until the next launch
       // (ApplyPendingRemovals), by which point this process (and whatever it
       // had loaded) has exited.
-      if (ImGui::SmallButton("Remove")) {
+      if (ImGui::SmallButton(UiText("remove", "Remove"))) {
         rex::system::ModState::MarkPendingRemoval(mods_root_, entry.id);
         ReloadFromDisk();
         list_changed = true;
@@ -696,9 +723,10 @@ void ModManagerDialog::DrawInstalledTab() {
     }
     if (pending_removal) {
       ImGui::SameLine();
-      ImGui::TextColored(kErrorBadge, "[pending removal]");
+      ImGui::TextColored(kErrorBadge, "%s", UiText("pending_removal", "[pending removal]"));
       if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Will be deleted on restart. Click Restore to keep it.");
+        ImGui::SetTooltip("%s", UiText("pending_removal_tip",
+                                       "Will be deleted on restart. Click Restore to keep it."));
       }
     }
     if (!mod.version.empty()) {
@@ -707,17 +735,18 @@ void ModManagerDialog::DrawInstalledTab() {
     }
     if (!mod.code.empty()) {
       ImGui::SameLine();
-      ImGui::TextColored(kCodeBadge, "[code]");
+      ImGui::TextColored(kCodeBadge, "%s", UiText("code_badge", "[code]"));
     }
 
     const auto* catalog_entry = find_catalog_entry(entry.id);
     if (catalog_.state() == rex::system::CatalogState::kReady && !catalog_entry) {
       ImGui::SameLine();
-      ImGui::TextColored(kMutedText, "[Sideloaded]");
+      ImGui::TextColored(kMutedText, "%s", UiText("sideloaded_badge", "[Sideloaded]"));
       if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-            "Installed locally (drag-and-drop or manually copied); not from the "
-            "mod catalog, so it won't get automatic update checks.");
+        ImGui::SetTooltip("%s", UiText("sideloaded_tip",
+                                       "Installed locally (drag-and-drop or manually copied); not "
+                                       "from the mod catalog, so it won't get automatic update "
+                                       "checks."));
       }
     }
 
@@ -725,9 +754,12 @@ void ModManagerDialog::DrawInstalledTab() {
       if (!mod.version.empty() &&
           rex::system::CompareVersionStrings(catalog_entry->version, mod.version) > 0) {
         ImGui::SameLine();
-        ImGui::TextColored(kUpdateBadge, "Update available (v%s)", catalog_entry->version.c_str());
+        ImGui::TextColored(kUpdateBadge, "%s",
+                           UiTextFormat("update_available", "Update available (v%s)",
+                                        catalog_entry->version.c_str())
+                               .c_str());
         ImGui::SameLine();
-        if (ImGui::SmallButton("Update")) {
+        if (ImGui::SmallButton(UiText("update", "Update"))) {
           catalog_.InstallAsync(*catalog_entry, mods_root_);
         }
       }
@@ -736,7 +768,9 @@ void ModManagerDialog::DrawInstalledTab() {
     for (const auto* issue : issues_for(entry.id)) {
       ImGui::SameLine();
       bool is_error = issue->kind == rex::system::ModIssue::Kind::kError;
-      ImGui::TextColored(is_error ? kErrorBadge : kWarnBadge, is_error ? "[error]" : "[warning]");
+      ImGui::TextColored(
+          is_error ? kErrorBadge : kWarnBadge, "%s",
+          is_error ? UiText("badge_error", "[error]") : UiText("badge_warning", "[warning]"));
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", issue->message.c_str());
       }
@@ -744,13 +778,22 @@ void ModManagerDialog::DrawInstalledTab() {
 
     ImGui::TextColored(kMutedText, "%s", entry.id.c_str());
     if (!mod.requires_mods.empty() && !requirements_satisfied(i)) {
-      ImGui::TextColored(kMutedText, "requires: %s", JoinRequirements(mod.requires_mods).c_str());
+      ImGui::TextColored(
+          kMutedText, "%s",
+          UiTextFormat("requires", "requires: %s", JoinRequirements(mod.requires_mods).c_str())
+              .c_str());
     }
     if (!mod.min_game_version.empty() && !game_version_satisfied(mod)) {
-      ImGui::TextColored(kMutedText, "needs game version: >= %s", mod.min_game_version.c_str());
+      ImGui::TextColored(kMutedText, "%s",
+                         UiTextFormat("needs_game_version", "needs game version: >= %s",
+                                      mod.min_game_version.c_str())
+                             .c_str());
     }
     if (!mod.conflicts_mods.empty()) {
-      ImGui::TextColored(kMutedText, "conflicts: %s", JoinCommaList(mod.conflicts_mods).c_str());
+      ImGui::TextColored(
+          kMutedText, "%s",
+          UiTextFormat("conflicts", "conflicts: %s", JoinCommaList(mod.conflicts_mods).c_str())
+              .c_str());
     }
     if (!mod.description.empty()) {
       ImGui::TextWrapped("%s", mod.description.c_str());
@@ -773,9 +816,9 @@ void ModManagerDialog::DrawInstalledTab() {
   float panes_height = ImGui::GetContentRegionAvail().y - header_row_height;
   float pane_width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
 
-  ImGui::TextColored(kHeaderText, "Available");
+  ImGui::TextColored(kHeaderText, "%s", UiText("pane_available", "Available"));
   ImGui::SameLine(pane_width + ImGui::GetStyle().ItemSpacing.x);
-  ImGui::TextColored(kHeaderText, "Enabled");
+  ImGui::TextColored(kHeaderText, "%s", UiText("pane_enabled", "Enabled"));
 
   auto entry_matches_filter = [&](const rex::system::ModStateEntry& entry) {
     auto manifest_it = manifests_.find(entry.id);
@@ -808,13 +851,13 @@ void ModManagerDialog::DrawInstalledTab() {
 }
 
 void ModManagerDialog::DrawCatalogTab() {
-  if (ImGui::Button("Refresh")) {
+  if (ImGui::Button(UiText("refresh", "Refresh"))) {
     catalog_.Refresh();
   }
   ImGui::SameLine();
   ImGui::SetNextItemWidth(-1.0f);
-  ImGui::InputTextWithHint("##catalogfilter", "Filter mods...", catalog_filter_buf_,
-                           sizeof(catalog_filter_buf_));
+  ImGui::InputTextWithHint("##catalogfilter", UiText("filter_mods", "Filter mods..."),
+                           catalog_filter_buf_, sizeof(catalog_filter_buf_));
   const std::string catalog_filter(catalog_filter_buf_);
   ImGui::Separator();
 
@@ -822,11 +865,13 @@ void ModManagerDialog::DrawCatalogTab() {
   auto install_status = catalog_.InstallSnapshot();
   if (install_status.in_progress) {
     if (install_status.total_bytes > 0) {
-      ImGui::TextColored(kMutedText, "Installing... %.0f%%",
-                         100.0 * static_cast<double>(install_status.downloaded_bytes) /
-                             static_cast<double>(install_status.total_bytes));
+      ImGui::TextColored(kMutedText, "%s",
+                         UiTextFormat("installing_percent", "Installing... %.0f%%",
+                                      100.0 * static_cast<double>(install_status.downloaded_bytes) /
+                                          static_cast<double>(install_status.total_bytes))
+                             .c_str());
     } else {
-      ImGui::TextColored(kMutedText, "Installing...");
+      ImGui::TextColored(kMutedText, "%s", UiText("installing", "Installing..."));
     }
   } else if (install_status.done) {
     ImGui::TextColored(install_status.ok ? kUpdateBadge : kErrorBadge, "%s",
@@ -864,7 +909,8 @@ void ModManagerDialog::DrawCatalogTab() {
     }
     if (!mod.author.empty()) {
       ImGui::SameLine();
-      ImGui::TextColored(kMutedText, "by %s", mod.author.c_str());
+      ImGui::TextColored(kMutedText, "%s",
+                         UiTextFormat("by_author", "by %s", mod.author.c_str()).c_str());
     }
     if (!mod.description.empty()) {
       ImGui::TextWrapped("%s", mod.description.c_str());
@@ -876,17 +922,20 @@ void ModManagerDialog::DrawCatalogTab() {
     std::string incompatible_reason;
     if (!mod.game_version.empty() &&
         rex::system::CompareVersionStrings(host_version, mod.game_version) < 0) {
-      incompatible_reason = "Requires game version >= " + mod.game_version + " (running " +
-                            (host_version.empty() ? "unknown" : host_version) + ")";
+      incompatible_reason =
+          UiTextFormat("incompatible_version", "Requires game version >= %s (running %s)",
+                       mod.game_version.c_str(),
+                       host_version.empty() ? UiText("unknown", "unknown") : host_version.c_str());
     } else if (!mod.platforms.empty() && std::find(mod.platforms.begin(), mod.platforms.end(),
                                                    host_platform) == mod.platforms.end()) {
       incompatible_reason =
-          "No binary for this platform (ships: " + JoinCommaList(mod.platforms) + ")";
+          UiTextFormat("incompatible_platform", "No binary for this platform (ships: %s)",
+                       JoinCommaList(mod.platforms).c_str());
     }
 
     if (!incompatible_reason.empty()) {
       ImGui::BeginDisabled();
-      ImGui::SmallButton("Install");
+      ImGui::SmallButton(UiText("install", "Install"));
       ImGui::EndDisabled();
       if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("%s", incompatible_reason.c_str());
@@ -894,14 +943,14 @@ void ModManagerDialog::DrawCatalogTab() {
     } else if (already_installed) {
       if (!installed_it->second.version.empty() &&
           rex::system::CompareVersionStrings(mod.version, installed_it->second.version) > 0) {
-        if (ImGui::SmallButton("Update")) {
+        if (ImGui::SmallButton(UiText("update", "Update"))) {
           catalog_.InstallAsync(mod, mods_root_);
         }
       } else {
-        ImGui::TextColored(kMutedText, "Installed");
+        ImGui::TextColored(kMutedText, "%s", UiText("installed", "Installed"));
       }
     } else {
-      if (ImGui::SmallButton("Install")) {
+      if (ImGui::SmallButton(UiText("install", "Install"))) {
         catalog_.InstallAsync(mod, mods_root_);
       }
     }
@@ -920,7 +969,7 @@ void ModManagerDialog::DrawKeybindsSection(const rex::system::ModInfo& mod) {
     if (bind.owner != mod.folder_name || !bind.active)
       continue;
     if (!drew_header) {
-      ImGui::TextColored(kMutedText, "Keybinds:");
+      ImGui::TextColored(kMutedText, "%s", UiText("keybinds", "Keybinds:"));
       drew_header = true;
     }
 
@@ -929,24 +978,30 @@ void ModManagerDialog::DrawKeybindsSection(const rex::system::ModInfo& mod) {
     ImGui::SameLine();
 
     bool listening = listening_bind_ == bind.name;
-    std::string label = listening ? "...(press a key)..." : bind.effective_key;
+    std::string label = listening ? UiText("press_key", "...(press a key)...") : bind.effective_key;
     if (label.empty())
-      label = "(unbound)";
+      label = UiText("unbound", "(unbound)");
     if (ImGui::Button(label.c_str())) {
       listening_bind_ = listening ? std::string{} : bind.name;
     }
     if (bind.conflicted) {
       ImGui::SameLine();
-      ImGui::TextColored(kConflictBadge, "[unresolved conflict]");
+      ImGui::TextColored(kConflictBadge, "%s",
+                         UiText("unresolved_conflict", "[unresolved conflict]"));
       if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Wanted '%s'; no free key was available.", bind.requested_key.c_str());
+        ImGui::SetTooltip("%s",
+                          UiTextFormat("unresolved_tip", "Wanted '%s'; no free key was available.",
+                                       bind.requested_key.c_str())
+                              .c_str());
       }
     } else if (bind.effective_key != bind.requested_key) {
       ImGui::SameLine();
-      ImGui::TextColored(kConflictBadge, "[moved]");
+      ImGui::TextColored(kConflictBadge, "%s", UiText("moved", "[moved]"));
       if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Wanted '%s', already in use by another mod.",
-                          bind.requested_key.c_str());
+        ImGui::SetTooltip("%s",
+                          UiTextFormat("moved_tip", "Wanted '%s', already in use by another mod.",
+                                       bind.requested_key.c_str())
+                              .c_str());
       }
     }
 
@@ -981,21 +1036,26 @@ void ModManagerDialog::DrawCvarsSection(const rex::system::ModInfo& mod) {
     return;
   auto divergent = tracker->DivergentOverrides();
 
-  ImGui::TextColored(kMutedText, "Cvars:");
+  ImGui::TextColored(kMutedText, "%s", UiText("cvars", "Cvars:"));
   for (const auto& entry : activity) {
     ImGui::PushID(entry.name.c_str());
     if (entry.is_new_definition) {
-      ImGui::TextColored(kMutedText, "defines %s", entry.name.c_str());
+      ImGui::TextColored(kMutedText, "%s",
+                         UiTextFormat("cvar_defines", "defines %s", entry.name.c_str()).c_str());
     } else {
-      ImGui::TextColored(kMutedText, "sets %s: %s -> %s", entry.name.c_str(),
-                         entry.old_value.c_str(), entry.new_value.c_str());
+      ImGui::TextColored(kMutedText, "%s",
+                         UiTextFormat("cvar_sets", "sets %s: %s -> %s", entry.name.c_str(),
+                                      entry.old_value.c_str(), entry.new_value.c_str())
+                             .c_str());
     }
     auto it = divergent.find(entry.name);
     if (it != divergent.end()) {
       ImGui::SameLine();
-      ImGui::TextColored(kConflictBadge, "[conflict]");
+      ImGui::TextColored(kConflictBadge, "%s", UiText("cvar_conflict", "[conflict]"));
       if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Also set by: %s", JoinCommaList(it->second).c_str());
+        ImGui::SetTooltip("%s", UiTextFormat("cvar_also_set", "Also set by: %s",
+                                             JoinCommaList(it->second).c_str())
+                                    .c_str());
       }
     }
     ImGui::PopID();
