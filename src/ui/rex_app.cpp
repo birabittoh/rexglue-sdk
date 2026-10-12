@@ -37,8 +37,6 @@
 #include <rex/audio/audio_system.h>
 #include <rex/audio/sdl/sdl_audio_system.h>
 #include <rex/input/input_system.h>
-#include <rex/input/touch/touch_controls_overlay.h>
-#include <rex/input/touch/touch_input_driver.h>
 #include <rex/kernel/init.h>
 #include <rex/string/numeric.h>
 #include <rex/system.h>
@@ -424,14 +422,6 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
   if (window_ && runtime_->input_system()) {
     auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
     input_sys->AttachWindow(window_.get());
-    // The pad has to be drawn where the user is touching, which is only known
-    // once the driver is attached to the window it hit-tests against.
-    if (imgui_drawer_) {
-      if (auto* touch_driver = input_sys->GetDriver<rex::input::touch::TouchInputDriver>()) {
-        touch_controls_overlay_ = std::make_unique<rex::input::touch::TouchControlsOverlay>(
-            imgui_drawer_.get(), touch_driver, input_sys);
-      }
-    }
   }
 
   if (ppc_info_.register_modules) {
