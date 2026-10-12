@@ -28,6 +28,7 @@
 #include <rex/logging.h>
 #include <rex/system/achievement_manager.h>
 #include <rex/system/leaderboard_manager.h>
+#include <rex/system/user_context.h>
 #include <rex/system/thread_state.h>
 #include <rex/thread/fiber.h>
 #include <rex/system/util/native_list.h>
@@ -340,6 +341,11 @@ class KernelState {
   LeaderboardManager& leaderboards() { return leaderboard_manager_; }
   const LeaderboardManager& leaderboards() const { return leaderboard_manager_; }
 
+  // Per-user XGIUserSetContext store and XLast-backed rich presence.
+  UserContextManager& user_contexts();
+  const UserContextManager& user_contexts() const;
+  UserContextListenerHandle RegisterUserContextCallback(UserContextCallback cb);
+
  private:
   void SignalAllWaitableObjects();
   void WaitForThreadsToExit(const std::vector<object_ref<XThread>>& threads, uint32_t timeout_ms);
@@ -392,6 +398,7 @@ class KernelState {
 
   AchievementManager achievement_manager_;
   LeaderboardManager leaderboard_manager_;
+  mutable std::unique_ptr<UserContextManager> user_context_manager_;
 
   std::atomic<bool> dispatch_thread_running_;
   std::atomic<bool> terminating_title_{false};

@@ -46,6 +46,7 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       uint32_t context_value = memory::load_and_swap<uint32_t>(buffer + 20);
       REXKRNL_DEBUG("XGIUserSetContextEx({:08X}, {:08X}, {:08X})", user_index, context_id,
                     context_value);
+      kernel_state_->user_contexts().SetContext(user_index, context_id, context_value);
       return X_E_SUCCESS;
     }
     case 0x000B0007: {
@@ -497,11 +498,17 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       uint32_t context_id = context ? memory::load_and_swap<uint32_t>(context + 0) : 0;
       REXKRNL_DEBUG("XGIUserGetContext({:08X}, {:08X}, {:08X}))", user_index, context_ptr,
                     context_id);
-      uint32_t value = 0;
-      if (context) {
-        memory::store_and_swap<uint32_t>(context + 4, value);
+      auto value = kernel_state_->user_contexts().GetContext(user_index, context_id);
+      if (!value) {
+        if (context) {
+          memory::store_and_swap<uint32_t>(context + 4, 0);
+        }
+        return X_E_INVALIDARG;
       }
-      return X_E_FAIL;
+      if (context) {
+        memory::store_and_swap<uint32_t>(context + 4, *value);
+      }
+      return X_E_SUCCESS;
     }
     case 0x000B0060: {
       assert_true(!buffer_length || buffer_length == 32);

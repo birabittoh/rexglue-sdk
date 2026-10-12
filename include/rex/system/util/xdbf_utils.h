@@ -93,6 +93,17 @@ struct XdbfAchievementTableEntry {
   rex::be<uint32_t> unk20;
 };
 static_assert_size(XdbfAchievementTableEntry, 0x24);
+
+// Title-defined context (XCXT) entry. Enumerates the id, the localized string
+// id, and the valid range of values for one user context.
+struct XdbfContextTableEntry {
+  rex::be<uint32_t> id;
+  rex::be<uint16_t> unk1;
+  rex::be<uint16_t> string_id;
+  rex::be<uint32_t> max_value;
+  rex::be<uint32_t> default_value;
+};
+static_assert_size(XdbfContextTableEntry, 16);
 #pragma pack(pop)
 
 struct XdbfBlock {
@@ -119,6 +130,9 @@ class XdbfWrapper {
   // Returns the empty string if the entry is not found.
   std::string GetStringTableEntry(XLanguage language, uint16_t string_id) const;
   std::vector<XdbfAchievementTableEntry> GetAchievements() const;
+
+  // Title-defined contexts (XCXT metadata section).
+  std::vector<XdbfContextTableEntry> GetContexts() const;
 
  private:
   const uint8_t* data_ = nullptr;
@@ -147,6 +161,10 @@ class XdbfGameData : public XdbfWrapper {
   std::string title() const;
 
   std::string title(XLanguage language) const;
+
+  // The title's XLast (XSRC metadata section), gzip-decompressed to its raw XML
+  // bytes (UTF-16). Empty when the title ships no XLast data.
+  std::vector<uint8_t> xlast() const;
 };
 
 }  // namespace util

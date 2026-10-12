@@ -11,6 +11,8 @@
 
 #include <rex/system/util/xdbf_utils.h>
 
+#include <miniz.h>
+
 namespace rex {
 namespace system {
 namespace util {
@@ -19,10 +21,77 @@ constexpr memory::fourcc_t kXdbfSignatureXdbf = memory::make_fourcc("XDBF");
 constexpr memory::fourcc_t kXdbfSignatureXstc = memory::make_fourcc("XSTC");
 constexpr memory::fourcc_t kXdbfSignatureXstr = memory::make_fourcc("XSTR");
 constexpr memory::fourcc_t kXdbfSignatureXach = memory::make_fourcc("XACH");
+constexpr memory::fourcc_t kXdbfSignatureXcxt = memory::make_fourcc("XCXT");
+constexpr memory::fourcc_t kXdbfSignatureXsrc = memory::make_fourcc("XSRC");
 
 constexpr uint64_t kXdbfIdTitle = 0x8000;
 constexpr uint64_t kXdbfIdXstc = 0x58535443;
 constexpr uint64_t kXdbfIdXach = 0x58414348;
+constexpr uint64_t kXdbfIdXctx = 0x58435854;
+constexpr uint64_t kXdbfIdXsrc = 0x58535243;
+
+// XCXT and XSRC use the 12-byte section header (magic/version/size) and carry
+// their own count or filename field, unlike XSTR/XACH which embed a u16 count
+// (the 14-byte XdbfSectionHeader layout).
+constexpr size_t kXdbfSectionHeaderBase = 12;
+
+namespace {
+
+uint32_t ReadBe32(const uint8_t* p) {
+  return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
+         (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
+}
+
+// Decompresses an RFC 1952 gzip stream by hand-parsing the header and handing
+// the raw deflate payload to miniz (tinfl is self-terminating, so the trailing
+// CRC32/ISIZE footer is ignored).
+bool Gunzip(const uint8_t* data, size_t size, std::vector<uint8_t>& out) {
+  if (size < 18 || data[0] != 0x1f || data[1] != 0x8b || data[2] != 8) {
+    return false;
+  }
+  const uint8_t flags = data[3];
+  size_t pos = 10;
+
+  if (flags & 0x04) {  // FEXTRA
+    if (pos + 2 > size) {
+      return false;
+    }
+    pos += 2 + static_cast<size_t>(data[pos] | (data[pos + 1] << 8));
+  }
+  auto skip_cstring = [&]() -> bool {
+    while (pos < size && data[pos] != 0) {
+      ++pos;
+    }
+    if (pos >= size) {
+      return false;
+    }
+    ++pos;
+    return true;
+  };
+  if ((flags & 0x08) && !skip_cstring()) {  // FNAME
+    return false;
+  }
+  if ((flags & 0x10) && !skip_cstring()) {  // FCOMMENT
+    return false;
+  }
+  if (flags & 0x02) {  // FHCRC
+    pos += 2;
+  }
+  if (pos >= size) {
+    return false;
+  }
+
+  size_t out_len = 0;
+  void* decompressed = tinfl_decompress_mem_to_heap(data + pos, size - pos, &out_len, 0);
+  if (!decompressed) {
+    return false;
+  }
+  out.assign(static_cast<uint8_t*>(decompressed), static_cast<uint8_t*>(decompressed) + out_len);
+  mz_free(decompressed);
+  return true;
+}
+
+}  // namespace
 
 XdbfWrapper::XdbfWrapper(const uint8_t* data, size_t data_size)
     : data_(data), data_size_(data_size) {
@@ -105,6 +174,33 @@ std::vector<XdbfAchievementTableEntry> XdbfWrapper::GetAchievements() const {
   return achievements;
 }
 
+std::vector<XdbfContextTableEntry> XdbfWrapper::GetContexts() const {
+  std::vector<XdbfContextTableEntry> contexts;
+
+  auto context_table = GetEntry(XdbfSection::kMetadata, kXdbfIdXctx);
+  if (!context_table || context_table.size < kXdbfSectionHeaderBase + sizeof(uint32_t)) {
+    return contexts;
+  }
+
+  auto xcxt_head = reinterpret_cast<const XdbfSectionHeader*>(context_table.buffer);
+  assert_true(xcxt_head->magic == kXdbfSignatureXcxt);
+  assert_true(xcxt_head->version == 1);
+
+  const uint8_t* ptr = context_table.buffer + kXdbfSectionHeaderBase;
+  const uint8_t* end = context_table.buffer + context_table.size;
+  const uint32_t count = ReadBe32(ptr);
+  ptr += sizeof(uint32_t);
+
+  for (uint32_t i = 0; i < count; ++i) {
+    if (ptr + sizeof(XdbfContextTableEntry) > end) {
+      break;
+    }
+    contexts.push_back(*reinterpret_cast<const XdbfContextTableEntry*>(ptr));
+    ptr += sizeof(XdbfContextTableEntry);
+  }
+  return contexts;
+}
+
 XLanguage XdbfGameData::GetExistingLanguage(XLanguage language_to_check) const {
   // A bit of a hack. Check if title in specific language exist.
   // If it doesn't then for sure language is not supported.
@@ -131,6 +227,38 @@ std::string XdbfGameData::title() const {
 
 std::string XdbfGameData::title(XLanguage language) const {
   return GetStringTableEntry(language, kXdbfIdTitle);
+}
+
+std::vector<uint8_t> XdbfGameData::xlast() const {
+  std::vector<uint8_t> out;
+
+  auto xlast_table = GetEntry(XdbfSection::kMetadata, kXdbfIdXsrc);
+  if (!xlast_table || xlast_table.size < kXdbfSectionHeaderBase + 2 * sizeof(uint32_t)) {
+    return out;
+  }
+
+  auto xsrc_head = reinterpret_cast<const XdbfSectionHeader*>(xlast_table.buffer);
+  assert_true(xsrc_head->magic == kXdbfSignatureXsrc);
+  assert_true(xsrc_head->version == 1);
+
+  const uint8_t* ptr = xlast_table.buffer + kXdbfSectionHeaderBase;
+  const uint8_t* end = xlast_table.buffer + xlast_table.size;
+
+  // u32 filename_length, filename, u32 decompressed_size, u32 compressed_size.
+  const uint32_t filename_length = ReadBe32(ptr);
+  ptr += sizeof(uint32_t) + filename_length;
+  if (ptr + 2 * sizeof(uint32_t) > end) {
+    return out;
+  }
+  const uint32_t compressed_size = ReadBe32(ptr + sizeof(uint32_t));
+  ptr += 2 * sizeof(uint32_t);
+
+  if (compressed_size == 0 || ptr + compressed_size > end) {
+    return out;
+  }
+
+  Gunzip(ptr, compressed_size, out);
+  return out;
 }
 
 }  // namespace util

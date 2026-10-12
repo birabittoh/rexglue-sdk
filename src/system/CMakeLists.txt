@@ -5,6 +5,7 @@ set(REXSYSTEM_SOURCES
     mod_storage.cpp
     achievement_manager.cpp
     achievements.cpp
+    user_context.cpp
     leaderboard_manager.cpp
     kernel_state.cpp
     xmemory.cpp
@@ -29,6 +30,8 @@ set(REXSYSTEM_SOURCES
     util/object_table.cpp
     util/native_list.cpp
     util/xdbf_utils.cpp
+    util/xlast.cpp
+    util/presence_string_builder.cpp
     util/gameinfo_utils.cpp
 
     # XAM services

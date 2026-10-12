@@ -264,6 +264,24 @@ AchievementListenerHandle KernelState::RegisterAchievementUnlockCallback(
       [cb = std::move(cb)](const AchievementEvent& event) { cb(event.achievement); });
 }
 
+UserContextManager& KernelState::user_contexts() {
+  if (!user_context_manager_) {
+    user_context_manager_ = std::make_unique<UserContextManager>(this);
+  }
+  return *user_context_manager_;
+}
+
+const UserContextManager& KernelState::user_contexts() const {
+  if (!user_context_manager_) {
+    user_context_manager_ = std::make_unique<UserContextManager>(const_cast<KernelState*>(this));
+  }
+  return *user_context_manager_;
+}
+
+UserContextListenerHandle KernelState::RegisterUserContextCallback(UserContextCallback cb) {
+  return user_contexts().RegisterContextCallback(std::move(cb));
+}
+
 void KernelState::UnlockAchievement(uint32_t id) {
   (void)achievement_manager_.UnlockAchievement(id, AchievementNotification::kShow);
 }
