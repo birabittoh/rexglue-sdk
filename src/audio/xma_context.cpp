@@ -222,11 +222,44 @@ bool XmaContext::DecodePcmReplacement(XMA_CONTEXT_DATA* data) {
 
   if (!pcm_replacement_active_) {
     const uint8_t* input = GetCurrentInputBuffer(data);
-    if (!input || std::memcmp(input, "RXPcmSub", 8) != 0) {
+    if (!input) {
       return false;
     }
-    std::memcpy(pcm_replacement_tag_.data(), input, pcm_replacement_tag_.size());
-    pcm_replacement_cursor_ = 0;
+    if (std::memcmp(input, "RXPcmSub", 8) == 0) {
+      std::memcpy(pcm_replacement_tag_.data(), input, pcm_replacement_tag_.size());
+      pcm_replacement_cursor_ = 0;
+    } else {
+      // A seekable stub: every packet is a valid XMA header and frame chain
+      // with the tag at byte 6 and the packet's first sample at byte 22. The
+      // guest seeks by setting the read offset to a frame and the subframe
+      // skip, so those give the sample it wants.
+      const uint32_t offset = data->input_buffer_read_offset;
+      const uint32_t index = offset / kBitsPerPacket;
+      if (index >= data->GetCurrentInputBufferPacketCount()) {
+        return false;
+      }
+      const uint8_t* packet = input + index * kBytesPerPacket;
+      if (std::memcmp(packet + 6, "RXPcmSub", 8) != 0) {
+        return false;
+      }
+      std::memcpy(pcm_replacement_tag_.data(), packet + 6, pcm_replacement_tag_.size());
+      auto be32 = [](const uint8_t* p) {
+        return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3];
+      };
+      uint32_t sample = be32(packet + 22);
+      const uint32_t target = offset % kBitsPerPacket;
+      uint32_t bit = xma::GetPacketFrameOffset(packet);
+      for (uint32_t frame = 0; bit < target && frame < xma::GetPacketFrameCount(packet); ++frame) {
+        const uint32_t length = (be32(packet + bit / 8) << (bit % 8)) >> 17;
+        if (!length) {
+          break;
+        }
+        bit += length;
+        sample += kSamplesPerFrame;
+      }
+      sample += data->output_buffer_padding * kSamplesPerSubframe;
+      pcm_replacement_cursor_ = uint64_t(sample) << 32;
+    }
     pcm_replacement_active_ = true;
   }
 
