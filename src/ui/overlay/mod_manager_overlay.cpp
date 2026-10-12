@@ -352,15 +352,34 @@ void ModManagerDialog::DrawRestartBanner() {
                      UiText("restart_required", "Mod changes require a restart to take effect."));
   ImGui::PopStyleColor();
   ImGui::SameLine();
-  if (ImGui::SmallButton(has_pending_updates_ ? UiText("restart_apply", "Restart & Apply")
-                                              : UiText("restart_now", "Restart Now"))) {
-    // This draws on the guest thread. RequestClose runs OnClosing inline,
-    // whose TerminateTitle then self-terminates the calling guest thread
-    // before the hard exit, leaving the old process alive.
-    if (rex::platform::process::Relaunch() && window_) {
-      auto* window = window_;
-      window->app_context().CallInUIThread([window] { window->RequestClose(); });
+  const char* restart_label = has_pending_updates_ ? UiText("restart_apply", "Restart & Apply")
+                                                   : UiText("restart_now", "Restart Now");
+  const std::string popup = UiLabel("restart_title", "Warning", "confirm_restart");
+  if (ImGui::SmallButton(restart_label)) {
+    ImGui::OpenPopup(popup.c_str());
+  }
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
+                          ImVec2(0.5f, 0.5f));
+  if (ImGui::BeginPopupModal(popup.c_str(), nullptr,
+                             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+    ImGui::TextUnformatted(
+        UiText("restart_confirm", "All unsaved progress will be lost. Restart the game now?"));
+    ImGui::Spacing();
+    if (ImGui::Button(UiText("restart_yes", "Restart"))) {
+      ImGui::CloseCurrentPopup();
+      // This draws on the guest thread. RequestClose runs OnClosing inline,
+      // whose TerminateTitle then self-terminates the calling guest thread
+      // before the hard exit, leaving the old process alive.
+      if (rex::platform::process::Relaunch() && window_) {
+        auto* window = window_;
+        window->app_context().CallInUIThread([window] { window->RequestClose(); });
+      }
     }
+    ImGui::SameLine();
+    if (ImGui::Button(UiText("restart_cancel", "Cancel"))) {
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
   }
   ImGui::Separator();
 }
