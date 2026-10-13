@@ -10,12 +10,15 @@
  */
 
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <forward_list>
+#include <mutex>
 
 #include <disruptorplus/multi_threaded_claim_strategy.hpp>
 #include <disruptorplus/ring_buffer.hpp>
 #include <disruptorplus/sequence_barrier.hpp>
-#include <disruptorplus/spin_wait_strategy.hpp>
+#include <disruptorplus/sequence.hpp>
 
 #include <rex/assert.h>
 #include <rex/thread.h>
@@ -30,6 +33,55 @@ using compat_jthread = rex::thread::compat::jthread;
 using compat_stop_token = rex::thread::compat::stop_token;
 
 using WaitItem = TimerQueueWaitItem;
+
+// disruptorplus' blocking_wait_strategy hands its predicate and deadline to
+// the condition variable in the wrong order and does not compile.
+class BlockingWaitStrategy {
+ public:
+  dp::sequence_t wait_until_published(dp::sequence_t sequence, size_t count,
+                                      const std::atomic<dp::sequence_t>* const sequences[]) {
+    dp::sequence_t result;
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait(lock, [&] { return Published(sequence, count, sequences, result); });
+    return result;
+  }
+
+  template <typename Rep, typename Period>
+  dp::sequence_t wait_until_published(dp::sequence_t sequence, size_t count,
+                                      const std::atomic<dp::sequence_t>* const sequences[],
+                                      const std::chrono::duration<Rep, Period>& timeout) {
+    dp::sequence_t result;
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait_for(lock, timeout, [&] { return Published(sequence, count, sequences, result); });
+    return result;
+  }
+
+  template <typename Clock, typename Duration>
+  dp::sequence_t wait_until_published(dp::sequence_t sequence, size_t count,
+                                      const std::atomic<dp::sequence_t>* const sequences[],
+                                      const std::chrono::time_point<Clock, Duration>& deadline) {
+    dp::sequence_t result;
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait_until(lock, deadline, [&] { return Published(sequence, count, sequences, result); });
+    return result;
+  }
+
+  void signal_all_when_blocking() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    cv_.notify_all();
+  }
+
+ private:
+  static bool Published(dp::sequence_t sequence, size_t count,
+                        const std::atomic<dp::sequence_t>* const sequences[],
+                        dp::sequence_t& result) {
+    result = dp::minimum_sequence_after(sequence, count, sequences);
+    return dp::difference(result, sequence) >= 0;
+  }
+
+  std::mutex mutex_;
+  std::condition_variable cv_;
+};
 
 class TimerQueue {
  public:
@@ -66,14 +118,19 @@ class TimerQueue {
       return left->due_ < right->due_;
     };
 
-    set_current_thread_name("rex::thread::TimerQueue");
+    set_current_thread_name("rex::TimerQueue");
 
     while (!stop_token.stop_requested()) {
       {
         // Consume new wait items and add them to sorted wait queue
+        // Blocking rather than spinning: a spinning dispatcher holds a whole core,
+        // which on a phone is the prime core the guest needs. The idle wait is
+        // bounded because time_point::max() overflows some condvar deadlines.
+        const auto idle_deadline = clock::now() + std::chrono::hours(1);
         dp::sequence_t available = claim_strategy_.wait_until_published(
             next_sequence, next_sequence - 1,
-            wait_queue_.empty() ? clock::time_point::max() : wait_queue_.front()->due_);
+            wait_queue_.empty() ? idle_deadline
+                                : std::min(wait_queue_.front()->due_, idle_deadline));
 
         // Check for timeout
         if (available != next_sequence - 1) {
@@ -146,9 +203,9 @@ class TimerQueue {
   // This ring buffer will be used to introduce timers queued by the public API
   static constexpr size_t kWaitCount = 512;
   dp::ring_buffer<std::shared_ptr<WaitItem>> buffer_;
-  dp::spin_wait_strategy wait_strategy_;
-  dp::multi_threaded_claim_strategy<dp::spin_wait_strategy> claim_strategy_;
-  dp::sequence_barrier<dp::spin_wait_strategy> consumed_;
+  BlockingWaitStrategy wait_strategy_;
+  dp::multi_threaded_claim_strategy<BlockingWaitStrategy> claim_strategy_;
+  dp::sequence_barrier<BlockingWaitStrategy> consumed_;
 
   // This is a _sorted_ (ascending due_) list of active timers managed by a
   // dedicated thread
