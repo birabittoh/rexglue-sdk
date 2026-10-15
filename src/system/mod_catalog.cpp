@@ -321,7 +321,7 @@ ModCatalog::~ModCatalog() {
   }
 }
 
-void ModCatalog::Refresh() {
+void ModCatalog::Refresh(const std::string& catalog_name_override) {
   bool expected = false;
   if (!fetch_in_flight_.compare_exchange_strong(expected, true)) {
     return;  // already loading
@@ -331,7 +331,9 @@ void ModCatalog::Refresh() {
   }
 
   auto* runtime = rex::Runtime::instance();
-  std::string catalog_name = runtime ? runtime->catalog_name() : std::string();
+  std::string catalog_name = !catalog_name_override.empty() ? catalog_name_override
+                             : runtime                      ? runtime->catalog_name()
+                                                            : std::string();
   std::string query_url = EffectiveQueryUrl();
   std::string games_collection = REXCVAR_GET(mod_catalog_games_collection);
   std::string mods_collection = REXCVAR_GET(mod_catalog_mods_collection);

@@ -97,7 +97,9 @@ class ModCatalog {
   // Refresh() re-queries live. If `catalog_name` is empty, or both
   // mod_catalog_project, mod_catalog_url and mod_catalog_fallback_url are
   // empty, settles straight to kFailed without any network I/O.
-  void Refresh();
+  // `catalog_name` overrides the Runtime's, for callers that run before a
+  // Runtime exists (e.g. a launcher screen).
+  void Refresh(const std::string& catalog_name = {});
 
   CatalogState state() const { return state_.load(std::memory_order_acquire); }
 
