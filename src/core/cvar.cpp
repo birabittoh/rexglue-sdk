@@ -629,6 +629,16 @@ bool HasNonDefaultValue(std::string_view name) {
   return entry.getter() != entry.default_value;
 }
 
+bool SetFlagHidden(std::string_view name, bool hidden) {
+  std::lock_guard lock(GetRegistryMutex());
+  auto it = GetRegistryIndex().find(std::string(name));
+  if (it == GetRegistryIndex().end()) {
+    return false;
+  }
+  GetRegistryStorage()[it->second].hidden = hidden;
+  return true;
+}
+
 std::vector<std::string> ListModifiedFlags() {
   std::lock_guard lock(GetRegistryMutex());
   std::vector<std::string> result;

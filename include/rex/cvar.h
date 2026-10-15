@@ -73,6 +73,7 @@
  * - .range(min, max) - Numeric bounds validation
  * - .allowed({...}) - String enum validation
  * - .debug_only() - Mark as debug-only (for filtering in release UIs)
+ * - .hidden() - Keep out of the settings browser (see also SetFlagHidden)
  * - .validator(fn) - Custom validation function
  *
  * @section cvar_query Querying CVars
@@ -172,6 +173,8 @@ struct FlagEntry {
   Constraints constraints;
   std::string default_value;
   bool is_debug_only = false;
+  // Left out of the settings browser. Still read from config, CLI and env.
+  bool hidden = false;
   Source source = Source::kDefault;
   // True once this cvar's value came from the config file, or was set
   // explicitly by the user (e.g. via the settings overlay). Only cvars with
@@ -244,6 +247,10 @@ void ClearPendingRestartFlags();
 void ResetToDefault(std::string_view name);
 void ResetAllToDefaults();
 bool HasNonDefaultValue(std::string_view name);
+
+// Lets an app hide an SDK cvar it has no use for. Returns false if `name` is
+// not registered.
+bool SetFlagHidden(std::string_view name, bool hidden = true);
 std::vector<std::string> ListModifiedFlags();
 std::string SerializeToTOML();
 std::string SerializeToTOML(std::string_view category);
@@ -325,6 +332,11 @@ struct FlagRegistrar {
 
   FlagRegistrar&& debug_only() && {
     apply_([](FlagEntry& entry) { entry.is_debug_only = true; });
+    return std::move(*this);
+  }
+
+  FlagRegistrar&& hidden() && {
+    apply_([](FlagEntry& entry) { entry.hidden = true; });
     return std::move(*this);
   }
 
