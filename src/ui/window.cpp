@@ -21,15 +21,15 @@
 
 #include <imgui.h>
 
+// Hot: only read when the window opens, and apps may write the live size back
+// here, which must not count as a change waiting on a restart.
 REXCVAR_DEFINE_INT32(window_width, 0, "UI/Window",
-                     "Startup window width in logical pixels (0 = use app default)")
-    .range(0, 8192)
-    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+                     "Window width in logical pixels when it opens (0 = use app default)")
+    .range(0, 8192);
 
 REXCVAR_DEFINE_INT32(window_height, 0, "UI/Window",
-                     "Startup window height in logical pixels (0 = use app default)")
-    .range(0, 8192)
-    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+                     "Window height in logical pixels when it opens (0 = use app default)")
+    .range(0, 8192);
 
 // kHotReload (default): Window::SetFullscreen can be applied live, so the
 // change callback registered in ReXApp::SetupPresentation keeps the window
