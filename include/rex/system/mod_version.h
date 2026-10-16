@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -55,5 +56,16 @@ int CompareVersions(const std::vector<int>& have, const std::vector<int>& want);
 // compares. Used where a version can't be assumed to already be a validated
 // dotted number (e.g. catalog data).
 int CompareVersionStrings(std::string_view have, std::string_view want);
+
+// Parses <mod_root>/mod.toml into a ModInfo. Missing fields, or a missing
+// file, leave members empty; a malformed file logs a warning. Never fails,
+// since asset-only mods commonly omit the manifest.
+ModInfo ParseModInfo(const std::filesystem::path& mod_root);
+
+// Whether a mod's `target` list admits a game that answers to `game_targets`
+// (see RuntimeConfig::game_targets). An empty list, "any", or a host that
+// declares no targets all match.
+bool ModTargetsMatch(const std::vector<std::string>& mod_targets,
+                     const std::vector<std::string>& game_targets);
 
 }  // namespace rex::system

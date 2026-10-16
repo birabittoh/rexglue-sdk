@@ -343,6 +343,29 @@ read/write UI over everything above:
   against `ModCatalog::Snapshot()` (so it only shows once the "All" tab has
   data; nothing is marked when the catalog is disabled/unreachable).
 
+## `target`: mods made for one game build or data set
+
+A project that runs more than one build of its game (regions, consoles, data
+revisions) names the one in use through `RuntimeConfig::game_targets`, a
+function returning tags such as `{"360", "360-pal"}`. It is a function because
+the data is often picked in `OnFinalizePaths`, after `OnPreSetup`; `Setup()`
+calls it once, when it resolves the enabled mods.
+
+A mod restricts itself with `target` in `mod.toml`, a comma list or an array:
+
+```toml
+target = "360-pal"
+target = ["360-pal", "360-usa"]
+```
+
+No `target`, `any`, or a project that declares no tags admits the mod. A mod
+whose targets match none of the tags stays enabled in `mods.toml` but is left
+out of the run: no overlay roots, no code plugin, absent from
+`EnabledModsInfo()`. `Runtime::TargetSkippedModsInfo()` lists those mods, and
+the mod manager overlay marks them on the Installed tab. The tag vocabulary is
+the project's; the SDK only compares lowercased strings
+(`rex::system::ModTargetsMatch`).
+
 ## `platform` strings and per-platform `code/` subdirectories (code mods only)
 
 The SDK's own `ModInfo`/`ParseModInfo` now parses a `platform` key into

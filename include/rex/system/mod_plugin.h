@@ -153,6 +153,13 @@ struct ModInfo {
   // not gate LoadModPlugin, but is consumed by rex::system::ModState::Validate
   // to flag a code mod with no binary for the running host.
   std::vector<std::string> platforms;
+
+  // Game builds or data sets this mod is made for, from mod.toml's `target`
+  // key (a comma list or an array, lowercased). Empty means any. A mod whose
+  // targets miss RuntimeConfig::game_targets stays enabled in mods.toml but is
+  // left out of the run: no overlay roots, no code plugin, not in
+  // EnabledModsInfo(). See Runtime::TargetSkippedModsInfo().
+  std::vector<std::string> targets;
 };
 
 // Loads <mod_root>/code/<code_stem>[<config-postfix>].dll (falling back to

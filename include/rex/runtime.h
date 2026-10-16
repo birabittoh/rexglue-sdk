@@ -113,6 +113,11 @@ struct RuntimeConfig {
   // (see rex::ui::HintToastDialog), set in OnPreSetup(). Empty (the
   // default) shows nothing. Example: "Press F4 to open settings.".
   std::string startup_hint;
+  // Names this run's game build or data answers to (e.g. {"360", "360-pal"}),
+  // matched against mod.toml's `target` key. A function because projects
+  // often pick their data in OnFinalizePaths, after OnPreSetup; it is called
+  // once, when Setup() resolves the enabled mods. Unset admits every mod.
+  std::function<std::vector<std::string>()> game_targets;
 };
 
 /// Helper macros for populating RuntimeConfig with concrete backends.
@@ -271,6 +276,14 @@ class Runtime {
   // them. Re-scans disk each call (cheap: one mod.toml parse per folder).
   std::vector<system::ModInfo> InstalledModsInfo() const;
 
+  // RuntimeConfig::game_targets, as evaluated during Setup(); empty when the
+  // project declares none.
+  const std::vector<std::string>& game_targets() const { return game_targets_; }
+
+  // Enabled mods left out of this run because their `target` misses
+  // game_targets(), in enabled_mods order.
+  std::vector<system::ModInfo> TargetSkippedModsInfo() const { return target_skipped_mods_info_; }
+
  private:
   // Set up VFS: mounts game_data_root as game:/d:, update_data_root as update:
   bool SetupVfs();
@@ -344,6 +357,11 @@ class Runtime {
   // Snapshot of the resolved mods.toml entries at the end of
   // ResolveEnabledMods(); see ModStateAtStartup().
   std::vector<system::ModStateEntry> mod_state_at_startup_;
+
+  // RuntimeConfig::game_targets, held until ResolveEnabledMods() evaluates it.
+  std::function<std::vector<std::string>()> game_targets_fn_;
+  std::vector<std::string> game_targets_;
+  std::vector<system::ModInfo> target_skipped_mods_info_;
 
   static Runtime* instance_;
 };

@@ -808,6 +808,12 @@ void ModManagerDialog::DrawInstalledTab() {
                                       mod.min_game_version.c_str())
                              .c_str());
     }
+    if (runtime_ && !rex::system::ModTargetsMatch(mod.targets, runtime_->game_targets())) {
+      ImGui::TextColored(kWarnBadge, "%s",
+                         UiTextFormat("other_target", "made for %s: not used on this game version",
+                                      JoinCommaList(mod.targets).c_str())
+                             .c_str());
+    }
     if (!mod.conflicts_mods.empty()) {
       ImGui::TextColored(
           kMutedText, "%s",

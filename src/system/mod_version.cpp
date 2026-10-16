@@ -14,6 +14,10 @@
 #include <cctype>
 #include <sstream>
 
+#include <toml++/toml.hpp>
+
+#include <rex/logging.h>
+
 namespace rex::system {
 
 std::vector<std::string> SplitCommaList(std::string_view csv) {
@@ -115,6 +119,72 @@ int CompareVersionStrings(std::string_view have, std::string_view want) {
   ParseVersionComponents(have, have_parts);
   ParseVersionComponents(want, want_parts);
   return CompareVersions(have_parts, want_parts);
+}
+
+// mod.toml is optional and purely descriptive except for `code`, which names
+// the DLL stem the mod loader should load from <mod_root>/code/,
+// requires/load_after/conflicts, which Runtime::ValidateModDependencies()
+// enforces, and `target`, which Runtime::ResolveEnabledMods() enforces.
+ModInfo ParseModInfo(const std::filesystem::path& mod_root) {
+  ModInfo info;
+  info.mod_root = mod_root;
+  info.folder_name = mod_root.filename().string();
+  info.display_name = info.folder_name;
+
+  auto icon_path = mod_root / "icon.png";
+  if (std::filesystem::is_regular_file(icon_path)) {
+    info.icon_path = icon_path;
+  }
+
+  auto manifest_path = mod_root / "mod.toml";
+  if (!std::filesystem::is_regular_file(manifest_path)) {
+    return info;
+  }
+
+  try {
+    auto table = toml::parse_file(manifest_path.string());
+    info.display_name = table["name"].value_or<std::string>(std::string(info.folder_name));
+    info.version = table["version"].value_or<std::string>("");
+    info.author = table["author"].value_or<std::string>("");
+    info.description = table["description"].value_or<std::string>("");
+    info.code = table["code"].value_or<std::string>("");
+    for (auto& entry : SplitCommaList(table["requires"].value_or<std::string>(""))) {
+      info.requires_mods.push_back(ParseRequirement(entry));
+    }
+    info.load_after_mods = SplitCommaList(table["load_after"].value_or<std::string>(""));
+    info.conflicts_mods = SplitCommaList(table["conflicts"].value_or<std::string>(""));
+    info.platforms = SplitCommaList(table["platform"].value_or<std::string>(""));
+    info.min_game_version =
+        ParseGameVersionConstraint(table["game_version"].value_or<std::string>(""));
+    // Either form, for a single target or several.
+    if (const auto* list = table["target"].as_array()) {
+      for (const auto& item : *list) {
+        for (auto& target : SplitCommaList(item.value_or<std::string>(""))) {
+          info.targets.push_back(std::move(target));
+        }
+      }
+    } else {
+      info.targets = SplitCommaList(table["target"].value_or<std::string>(""));
+    }
+    for (auto& target : info.targets) {
+      std::transform(target.begin(), target.end(), target.begin(),
+                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    }
+  } catch (const toml::parse_error& error) {
+    REXSYS_WARN("Failed to parse {}: {}", manifest_path.string(), error.what());
+  }
+  return info;
+}
+
+bool ModTargetsMatch(const std::vector<std::string>& mod_targets,
+                     const std::vector<std::string>& game_targets) {
+  if (mod_targets.empty() || game_targets.empty()) {
+    return true;
+  }
+  return std::any_of(mod_targets.begin(), mod_targets.end(), [&](const std::string& target) {
+    return target == "any" ||
+           std::find(game_targets.begin(), game_targets.end(), target) != game_targets.end();
+  });
 }
 
 }  // namespace rex::system

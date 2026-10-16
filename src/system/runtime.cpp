@@ -148,6 +148,7 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
   update_repo_ = config.update_repo;
   update_asset_format_ = config.update_asset_format;
   startup_hint_ = config.startup_hint;
+  game_targets_fn_ = std::move(config.game_targets);
 
   // Create memory system first
   memory_ = std::make_unique<memory::Memory>();
@@ -350,52 +351,11 @@ uint8_t* Runtime::virtual_membase() const {
 namespace {
 
 using rex::system::CompareVersions;
-using rex::system::ParseGameVersionConstraint;
+using rex::system::ModTargetsMatch;
+using rex::system::ParseModInfo;
 using rex::system::ParseRequirement;
 using rex::system::ParseVersionComponents;
 using rex::system::SplitCommaList;
-
-// mod.toml is optional and purely descriptive except for `code`, which names
-// the DLL stem the mod loader should load from <mod_root>/code/, and
-// requires/load_after/conflicts, which ValidateModDependencies() enforces.
-// Missing fields (or a missing file entirely) just leave ModInfo's members
-// empty; this must never hard-fail, since asset-only mods commonly omit it.
-system::ModInfo ParseModInfo(const std::filesystem::path& mod_root) {
-  system::ModInfo info;
-  info.mod_root = mod_root;
-  info.folder_name = mod_root.filename().string();
-  info.display_name = info.folder_name;
-
-  auto icon_path = mod_root / "icon.png";
-  if (std::filesystem::is_regular_file(icon_path)) {
-    info.icon_path = icon_path;
-  }
-
-  auto manifest_path = mod_root / "mod.toml";
-  if (!std::filesystem::is_regular_file(manifest_path)) {
-    return info;
-  }
-
-  try {
-    auto table = toml::parse_file(manifest_path.string());
-    info.display_name = table["name"].value_or<std::string>(std::string(info.folder_name));
-    info.version = table["version"].value_or<std::string>("");
-    info.author = table["author"].value_or<std::string>("");
-    info.description = table["description"].value_or<std::string>("");
-    info.code = table["code"].value_or<std::string>("");
-    for (auto& entry : SplitCommaList(table["requires"].value_or<std::string>(""))) {
-      info.requires_mods.push_back(ParseRequirement(entry));
-    }
-    info.load_after_mods = SplitCommaList(table["load_after"].value_or<std::string>(""));
-    info.conflicts_mods = SplitCommaList(table["conflicts"].value_or<std::string>(""));
-    info.platforms = SplitCommaList(table["platform"].value_or<std::string>(""));
-    info.min_game_version =
-        ParseGameVersionConstraint(table["game_version"].value_or<std::string>(""));
-  } catch (const toml::parse_error& error) {
-    REXSYS_WARN("Failed to parse {}: {}", manifest_path.string(), error.what());
-  }
-  return info;
-}
 
 }  // namespace
 
@@ -403,6 +363,15 @@ void Runtime::ResolveEnabledMods() {
   enabled_mod_roots_.clear();
   enabled_mods_info_.clear();
   mod_state_at_startup_.clear();
+  target_skipped_mods_info_.clear();
+  game_targets_.clear();
+  if (game_targets_fn_) {
+    for (auto& target : game_targets_fn_()) {
+      std::transform(target.begin(), target.end(), target.begin(),
+                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      game_targets_.push_back(std::move(target));
+    }
+  }
 
   // Shared with the mod manager overlay, so both agree on where mods live
   // when the mods_data_root cvar is unset (relative values are otherwise
@@ -446,23 +415,29 @@ void Runtime::ResolveEnabledMods() {
   }
 
   // Order is preserved: earlier entries are higher priority (see
-  // ModOverlayRoots).
-  for (auto& name : enabled_ids) {
-    auto mod_dir = mods_root / name;
-    if (std::filesystem::is_directory(mod_dir)) {
-      enabled_mod_roots_.push_back(mod_dir);
-      REXSYS_INFO("  Mod enabled: {} ({})", name, mod_dir.string());
-    } else {
-      REXSYS_WARN("  Mod '{}' not found at {}, skipping", name, mod_dir.string());
-    }
-  }
-
-  // Parse mod.toml once per enabled mod, in priority order, and cache it --
+  // ModOverlayRoots). mod.toml is parsed once per enabled mod and cached:
   // both EnabledModsInfo() and ValidateModDependencies() read this cache
   // rather than re-parsing.
-  enabled_mods_info_.reserve(enabled_mod_roots_.size());
-  for (auto& mod_root : enabled_mod_roots_) {
-    enabled_mods_info_.push_back(ParseModInfo(mod_root));
+  for (auto& name : enabled_ids) {
+    auto mod_dir = mods_root / name;
+    if (!std::filesystem::is_directory(mod_dir)) {
+      REXSYS_WARN("  Mod '{}' not found at {}, skipping", name, mod_dir.string());
+      continue;
+    }
+    auto info = ParseModInfo(mod_dir);
+    // Stays enabled in mods.toml, so picking a matching game brings it back.
+    if (!ModTargetsMatch(info.targets, game_targets_)) {
+      std::string targets;
+      for (const auto& target : info.targets) {
+        targets += (targets.empty() ? "" : ", ") + target;
+      }
+      REXSYS_INFO("  Mod '{}' targets {}, not this game; skipping", name, targets);
+      target_skipped_mods_info_.push_back(std::move(info));
+      continue;
+    }
+    enabled_mod_roots_.push_back(mod_dir);
+    enabled_mods_info_.push_back(std::move(info));
+    REXSYS_INFO("  Mod enabled: {} ({})", name, mod_dir.string());
   }
 }
 
