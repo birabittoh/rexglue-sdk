@@ -66,8 +66,9 @@ const std::vector<std::pair<std::string, uint16_t>>& GamepadButtonNames();
 
 /**
  * Parse a human-readable gamepad button name (e.g. "A", "LThumb", "DPadUp")
- * to its X_INPUT_GAMEPAD_BUTTON bitmask.
- * @return  Matching bitmask, or 0 if unrecognized.
+ * to its X_INPUT_GAMEPAD_BUTTON bitmask. Names joined by '+' ("Back+Start")
+ * form a combination, which counts as pressed only while all are held.
+ * @return  Matching bitmask, or 0 if any name is unrecognized.
  */
 uint16_t ParseGamepadButton(std::string_view name);
 

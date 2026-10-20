@@ -10,6 +10,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -79,6 +80,12 @@ class InputSystem : public system::IInputSystem {
   void SetGuestInputSuppressed(bool suppressed) { guest_input_suppressed_ = suppressed; }
   bool IsGuestInputSuppressed() const { return guest_input_suppressed_; }
 
+  // Buttons the host keeps for itself (the UI mode toggle). Once all of them
+  // are held, they are hidden from the guest until every one is released, so
+  // the press that toggles a mode never reaches the game.
+  void SetGuestReservedButtons(uint16_t mask) { guest_reserved_buttons_ = mask; }
+  uint16_t FilterGuestButtons(uint16_t buttons);
+
   /// Returns the currently connected host input devices and the guest users
   /// each one feeds. Safe for host UI and diagnostics to call while the guest
   /// is polling input.
@@ -115,6 +122,8 @@ class InputSystem : public system::IInputSystem {
   std::vector<InputDriver*> device_owners_;
 
   bool guest_input_suppressed_ = false;
+  std::atomic<uint16_t> guest_reserved_buttons_ = 0;
+  std::atomic<bool> guest_reserved_latched_ = false;
   std::mutex devices_mutex_;
 };
 

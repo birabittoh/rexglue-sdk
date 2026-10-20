@@ -176,6 +176,7 @@ const std::vector<std::pair<std::string, uint16_t>>& GamepadButtonNames() {
       {"RThumb", rex::input::X_INPUT_GAMEPAD_RIGHT_THUMB},
       {"Start", rex::input::X_INPUT_GAMEPAD_START},
       {"Back", rex::input::X_INPUT_GAMEPAD_BACK},
+      {"Guide", rex::input::X_INPUT_GAMEPAD_GUIDE},
       {"DPadUp", rex::input::X_INPUT_GAMEPAD_DPAD_UP},
       {"DPadDown", rex::input::X_INPUT_GAMEPAD_DPAD_DOWN},
       {"DPadLeft", rex::input::X_INPUT_GAMEPAD_DPAD_LEFT},
@@ -185,12 +186,27 @@ const std::vector<std::pair<std::string, uint16_t>>& GamepadButtonNames() {
 }
 
 uint16_t ParseGamepadButton(std::string_view name) {
-  for (const auto& [button_name, mask] : GamepadButtonNames()) {
-    if (button_name == name) {
-      return mask;
+  uint16_t combined = 0;
+  while (!name.empty()) {
+    const size_t plus = name.find('+');
+    const std::string_view part = name.substr(0, plus);
+    uint16_t mask = 0;
+    for (const auto& [button_name, button_mask] : GamepadButtonNames()) {
+      if (button_name == part) {
+        mask = button_mask;
+        break;
+      }
     }
+    if (mask == 0) {
+      return 0;
+    }
+    combined |= mask;
+    if (plus == std::string_view::npos) {
+      break;
+    }
+    name.remove_prefix(plus + 1);
   }
-  return 0;
+  return combined;
 }
 
 std::string GamepadButtonToString(uint16_t button) {
@@ -437,7 +453,7 @@ void PollGamepadBinds(const rex::input::X_INPUT_STATE& state) {
       entry.gamepad_was_down = false;  // key isn't a gamepad button (anymore)
       continue;
     }
-    bool down = (state.gamepad.buttons & mask) != 0;
+    bool down = (state.gamepad.buttons & mask) == mask;
     if (down && !entry.gamepad_was_down) {
       REXLOG_DEBUG("Gamepad bind '{}' fired (button '{}')", entry.name, entry.current_key);
       entry.callback();

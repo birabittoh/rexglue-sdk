@@ -1,7 +1,8 @@
 /**
  * @file        rex/ui/overlay/gamepad_ui.h
  * @brief       Two-mode gamepad controller: Gameplay (pad drives the guest)
- *              vs UI (pad drives the overlays), toggled by the guide button.
+ *              vs UI (pad drives the overlays), toggled by ui_mode_button
+ *              (guide by default).
  *
  * @copyright   Copyright (c) 2026 Tom Clay <tomc@tctechstuff.com>
  *              All rights reserved.
@@ -15,8 +16,9 @@
  *              them.
  *
  *              - Gameplay (default at boot): the pad drives the game exactly
- *                as before. This controller only edge-detects the guide
- *                button (and the bind_ui_mode keyboard fallback) and polls
+ *                as before. This controller only edge-detects
+ *                ui_mode_button (hidden from the guest while held) and the
+ *                bind_ui_mode keyboard fallback, and polls
  *                rex::ui::PollGamepadBinds so gamepad-keyed overlay-toggle
  *                binds still fire.
  *              - UI: the pad is fully claimed by this controller. Guest input
@@ -107,7 +109,7 @@ class GamepadUiController : public ImGuiDialog {
 
   // Edge-detection state for buttons this controller handles directly
   // (outside of ImGui's own nav, which tracks its own edges internally).
-  bool guide_was_down_ = false;
+  bool toggle_was_down_ = false;
   bool a_was_down_ = false;
   bool b_was_down_ = false;
   bool x_was_down_ = false;

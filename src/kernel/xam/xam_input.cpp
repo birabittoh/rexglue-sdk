@@ -120,7 +120,8 @@ u32 XamInputGetState_entry(u32 user_index, u32 flags, ppc_ptr_t<X_INPUT_STATE> i
     // own gameplay/UI mode toggle (see gamepad_ui.h), regardless of whether
     // guide passthrough is enabled for the host-side read.
     input_state->gamepad.buttons =
-        static_cast<uint16_t>(input_state->gamepad.buttons) & ~rex::input::X_INPUT_GAMEPAD_GUIDE;
+        is->FilterGuestButtons(static_cast<uint16_t>(input_state->gamepad.buttons)) &
+        ~rex::input::X_INPUT_GAMEPAD_GUIDE;
     // While UI mode owns the gamepad (see InputSystem::SetGuestInputSuppressed),
     // report a fully neutral controller so the guest's own menus can't react
     // to the same buttons the overlays are consuming.

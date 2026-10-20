@@ -403,6 +403,19 @@ X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
   return driver->GetDeviceCapabilities(chosen, flags, out_caps);
 }
 
+uint16_t InputSystem::FilterGuestButtons(uint16_t buttons) {
+  const uint16_t reserved = guest_reserved_buttons_;
+  const uint16_t held = buttons & reserved;
+  if (reserved == 0 || held == 0) {
+    guest_reserved_latched_ = false;
+    return buttons;
+  }
+  if (held == reserved) {
+    guest_reserved_latched_ = true;
+  }
+  return guest_reserved_latched_ ? static_cast<uint16_t>(buttons & ~reserved) : buttons;
+}
+
 X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
   SCOPE_profile_cpu_f("hid");
   std::lock_guard lock(devices_mutex_);

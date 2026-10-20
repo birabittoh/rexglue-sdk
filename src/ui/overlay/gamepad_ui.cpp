@@ -23,10 +23,20 @@
 #include <rex/input/input_system.h>
 #include <rex/logging.h>
 #include <rex/ui/keybinds.h>
+#include <rex/ui/ui_text.h>
+
+REXCVAR_DEFINE_STRING(ui_mode_button, "Guide", "Input",
+                      "Gamepad button that toggles gameplay/UI mode; join names with '+' "
+                      "for a combination, e.g. Back+Start");
 
 namespace rex::ui {
 
 namespace {
+
+uint16_t UiModeButtons() {
+  const uint16_t mask = ParseGamepadButton(REXCVAR_GET(ui_mode_button));
+  return mask ? mask : rex::input::X_INPUT_GAMEPAD_GUIDE;
+}
 
 constexpr int16_t kStickDeadzone = 8000;  // ~X_INPUT_GAMEPAD_LEFT_THUMB_DEADZONE
 constexpr uint8_t kTriggerThreshold = 30;
@@ -51,16 +61,15 @@ GamepadUiController::GamepadUiController(ImGuiDrawer* imgui_drawer, rex::Runtime
     : ImGuiDialog(imgui_drawer), runtime_(runtime) {
   // Guide is normally stripped from every guest read (see xam_input.cpp) and
   // only delivered to the host at all when this passthrough cvar is set --
-  // enable it unconditionally so this controller can read guide regardless
+  // enable it unconditionally so ui_mode_button can use guide regardless
   // of what the user has configured for in-game guide behavior.
   REXCVAR_SET(guide_button, true);
 
-  // Keyboard fallback: guide is frequently intercepted by Steam/the OS
-  // before it ever reaches the game, so a controller-only trigger would be a
-  // dead end for anyone hitting that. No is_visible/window_title: this
-  // bind doesn't toggle a single overlay, it toggles the whole input mode.
-  // Only sets a flag here rather than calling ToggleMode() directly; see
-  // pending_keyboard_toggle_'s comment in the header for why.
+  // Keyboard fallback: guide (the default pad toggle) is frequently
+  // intercepted by Steam/the OS before it ever reaches the game, so a controller-only trigger would
+  // be a dead end for anyone hitting that. No is_visible/window_title: this bind doesn't toggle a
+  // single overlay, it toggles the whole input mode. Only sets a flag here rather than calling
+  // ToggleMode() directly; see pending_keyboard_toggle_'s comment in the header for why.
   rex::ui::RegisterBind("bind_ui_mode", "Home", "Toggle gameplay/UI gamepad mode",
                         [this] { pending_keyboard_toggle_ = true; });
 }
@@ -99,7 +108,7 @@ void GamepadUiController::EnterUiMode() {
   ActivateInitialOverlay();
 
   flash_active_ = true;
-  flash_text_ = "UI Mode";
+  flash_text_ = UiText("gamepad_ui_mode", "UI Mode");
   flash_started_seconds_ = NowSeconds();
   REXLOG_DEBUG("Gamepad UI: entered UI mode");
 }
@@ -118,7 +127,7 @@ void GamepadUiController::EnterGameplayMode() {
   active_window_title_.clear();
 
   flash_active_ = true;
-  flash_text_ = "Gameplay Mode";
+  flash_text_ = UiText("gamepad_gameplay_mode", "Gameplay Mode");
   flash_started_seconds_ = NowSeconds();
   REXLOG_DEBUG("Gamepad UI: entered Gameplay mode");
 }
@@ -175,11 +184,13 @@ void GamepadUiController::OnDraw(ImGuiIO& io) {
     if (input_system_) {
       rex::input::X_INPUT_STATE state{};
       input_system_->GetState(0, &state);
-      const bool guide_down = (state.gamepad.buttons & rex::input::X_INPUT_GAMEPAD_GUIDE) != 0;
-      if (guide_down && !guide_was_down_) {
+      const uint16_t toggle = UiModeButtons();
+      input_system_->SetGuestReservedButtons(toggle);
+      const bool toggle_down = (state.gamepad.buttons & toggle) == toggle;
+      if (toggle_down && !toggle_was_down_) {
         ToggleMode();
       }
-      guide_was_down_ = guide_down;
+      toggle_was_down_ = toggle_down;
       if (mode_ == Mode::kGameplay) {  // may have just switched above
         rex::ui::PollGamepadBinds(state);
       }
@@ -209,13 +220,15 @@ void GamepadUiController::PollUiNavigation(ImGuiIO& io) {
     return;
   }
 
-  const bool guide_down = (buttons & rex::input::X_INPUT_GAMEPAD_GUIDE) != 0;
-  if (guide_down && !guide_was_down_) {
-    guide_was_down_ = guide_down;
+  const uint16_t toggle = UiModeButtons();
+  input_system_->SetGuestReservedButtons(toggle);
+  const bool toggle_down = (buttons & toggle) == toggle;
+  if (toggle_down && !toggle_was_down_) {
+    toggle_was_down_ = toggle_down;
     ToggleMode();
     return;  // now in Gameplay mode; nothing else to poll this frame
   }
-  guide_was_down_ = guide_down;
+  toggle_was_down_ = toggle_down;
 
   // D-pad + left stick both drive ImGui's item-to-item nav. The stick's
   // deflection is folded into the same dpad keys (past a threshold) rather
