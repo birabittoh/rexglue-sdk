@@ -32,7 +32,8 @@ inline bool ToggleSwitch(const char* label, bool* v) {
   const ImVec2 pos = ImGui::GetCursorScreenPos();
 
   ImGui::PushID(label);
-  bool changed = ImGui::InvisibleButton("##toggle", ImVec2(width, height));
+  bool changed =
+      ImGui::InvisibleButton("##toggle", ImVec2(width, height), ImGuiButtonFlags_EnableNav);
   if (changed) {
     *v = !*v;
   }
@@ -55,6 +56,10 @@ inline bool ToggleSwitch(const char* label, bool* v) {
                                              : ImGuiCol_FrameBg);
   ImDrawList* draw_list = ImGui::GetWindowDrawList();
   draw_list->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height), col_bg, height * 0.5f);
+  if (ImGui::IsItemFocused() && ImGui::GetIO().NavActive) {
+    draw_list->AddRect(pos, ImVec2(pos.x + width, pos.y + height),
+                       ImGui::GetColorU32(ImGuiCol_NavCursor), height * 0.5f, 0, 2.0f);
+  }
 
   const float knob_radius = height * 0.5f - 2.0f;
   const float knob_x =
