@@ -420,23 +420,14 @@ void WindowSDL::ApplyIconNow() {
 }
 
 void WindowSDL::ApplyNewMouseCapture() {
+  // Relative mode is not enabled here: ImGui captures the mouse on every
+  // button press, and relative mode would lock and re-center the cursor.
+  // Consumers that want raw deltas (the MnK driver) call
+  // SetRelativeMouseMode themselves.
   SDL_CaptureMouse(true);
-  // Relative mode gives raw, unaccelerated deltas via event.motion.xrel/yrel
-  // instead of OS-cursor-ballistics-affected absolute position, and confines
-  // the (hidden) cursor to the window without needing manual re-centering.
-  if (sdl_window_) {
-    if (!SDL_SetWindowRelativeMouseMode(sdl_window_, true)) {
-      REXLOG_WARN("SDL_SetWindowRelativeMouseMode(true) failed: {}", SDL_GetError());
-    } else if (!SDL_GetWindowRelativeMouseMode(sdl_window_)) {
-      REXLOG_WARN("SDL_SetWindowRelativeMouseMode(true) reported success but mode is still off");
-    }
-  }
 }
 
 void WindowSDL::ApplyNewMouseRelease() {
-  if (sdl_window_) {
-    SDL_SetWindowRelativeMouseMode(sdl_window_, false);
-  }
   SDL_CaptureMouse(false);
 }
 
