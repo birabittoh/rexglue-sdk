@@ -62,6 +62,9 @@ class ModManagerDialog : public ImGuiDialog {
   // running is ignored rather than queued.
   void SideloadArchive(std::filesystem::path zip_path);
 
+  // Asks for a mod archive with the system file dialog, then sideloads it.
+  void PickArchive();
+
   // F1 hides and reshows this dialog rather than destroying it: tearing it
   // down has to join its catalog/icon workers, and a fresh one would re-run
   // the catalog query on every open.
@@ -177,6 +180,11 @@ class ModManagerDialog : public ImGuiDialog {
   std::thread sideload_thread_;
   std::mutex sideload_mutex_;
   SideloadResult sideload_result_;
+  // The archive chosen in the file dialog, whose callback may run on another
+  // thread; the next draw hands it to SideloadArchive.
+  std::mutex picked_mutex_;
+  std::filesystem::path picked_archive_;
+  std::atomic<bool> picking_{false};
   // Id of the mod to auto-scroll to and highlight in the Installed tab, on
   // the next draw after a successful sideload. Cleared once applied.
   std::string focus_mod_id_;

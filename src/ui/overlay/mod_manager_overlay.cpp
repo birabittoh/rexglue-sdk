@@ -21,7 +21,10 @@
 
 #include <imgui.h>
 
+#include <SDL3/SDL.h>
+
 #include <rex/cvar.h>
+#include <rex/filesystem.h>
 #include <rex/net/http.h>
 #include <rex/platform/process.h>
 #include <rex/runtime.h>
@@ -216,6 +219,62 @@ void ModManagerDialog::SideloadArchive(std::filesystem::path zip_path) {
   });
 }
 
+namespace {
+
+// Android's picker hands back content:// URIs that only SDL's IO can open, so
+// those are copied to a plain file the archive reader can use. Other
+// platforms return a real path.
+std::filesystem::path ResolvePickedArchive(const char* picked) {
+  if (std::string_view(picked).starts_with("content://")) {
+#if defined(SDL_PLATFORM_ANDROID)
+    const char* cache = SDL_GetAndroidCachePath();
+    if (!cache) {
+      return {};
+    }
+    const std::filesystem::path staged = rex::to_path(cache) / "sideload.zip";
+    SDL_IOStream* in = SDL_IOFromFile(picked, "rb");
+    if (!in) {
+      return {};
+    }
+    std::ofstream out(staged, std::ios::binary | std::ios::trunc);
+    char buffer[64 * 1024];
+    while (out) {
+      const size_t got = SDL_ReadIO(in, buffer, sizeof(buffer));
+      if (got == 0) {
+        break;
+      }
+      out.write(buffer, static_cast<std::streamsize>(got));
+    }
+    SDL_CloseIO(in);
+    return out ? staged : std::filesystem::path{};
+#else
+    return {};
+#endif
+  }
+  return rex::to_path(std::string_view(picked));
+}
+
+}  // namespace
+
+void ModManagerDialog::PickArchive() {
+  bool expected = false;
+  if (!picking_.compare_exchange_strong(expected, true)) {
+    return;
+  }
+  static const SDL_DialogFileFilter kFilters[] = {{"Mod archive", "zip"}};
+  SDL_ShowOpenFileDialog(
+      [](void* userdata, const char* const* files, int) {
+        auto* self = static_cast<ModManagerDialog*>(userdata);
+        if (files && files[0]) {
+          std::filesystem::path path = ResolvePickedArchive(files[0]);
+          std::lock_guard<std::mutex> lock(self->picked_mutex_);
+          self->picked_archive_ = std::move(path);
+        }
+        self->picking_.store(false, std::memory_order_release);
+      },
+      this, nullptr, kFilters, 1, nullptr, false);
+}
+
 void ModManagerDialog::ReloadFromDisk() {
   mods_root_ = rex::system::ModState::ResolveModsRoot();
   entries_ = rex::system::ModState::LoadReconciled(mods_root_);
@@ -386,6 +445,16 @@ void ModManagerDialog::DrawRestartBanner() {
 
 void ModManagerDialog::DrawInstalledTab() {
   {
+    std::filesystem::path picked;
+    {
+      std::lock_guard<std::mutex> lock(picked_mutex_);
+      picked.swap(picked_archive_);
+    }
+    if (!picked.empty()) {
+      SideloadArchive(std::move(picked));
+    }
+  }
+  {
     SideloadResult sideload_snapshot;
     {
       std::lock_guard<std::mutex> lock(sideload_mutex_);
@@ -436,6 +505,10 @@ void ModManagerDialog::DrawInstalledTab() {
   ImGui::SameLine();
   if (ImGui::SmallButton(UiText("open_folder", "Open Mods Folder"))) {
     rex::platform::process::OpenFolder(mods_root_);
+  }
+  ImGui::SameLine();
+  if (ImGui::SmallButton(UiText("install_mod", "Install mod..."))) {
+    PickArchive();
   }
   // Same visibility condition as DrawRestartBanner; only worth offering a
   // reset once there's actually something to reset back to what's running.
