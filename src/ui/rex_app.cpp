@@ -703,7 +703,7 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
       [this] { return static_cast<bool>(achievements_overlay_); },
       "Achievements###overlay_achievements");
   rex::ui::RegisterBind(
-      "bind_renderdoc_capture", "F10", "Capture the next guest-rendered frame with RenderDoc",
+      "bind_renderdoc_capture", "", "Capture the next guest-rendered frame with RenderDoc",
       [this] {
         if (!runtime_)
           return;
