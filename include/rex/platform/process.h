@@ -30,6 +30,11 @@ namespace rex::platform::process {
 // wait on it.
 bool Relaunch();
 
+// Replaces what Relaunch() does, for hosts where forking the executable is not a
+// restart (Android). The handler may never return, as it can kill the process.
+using RelaunchHandler = bool (*)();
+void SetRelaunchHandler(RelaunchHandler handler);
+
 // If this process was started by another instance's Relaunch(), blocks
 // (up to a few seconds) until that instance has fully exited; a no-op
 // otherwise, or once already called (the handoff is consumed on first use).

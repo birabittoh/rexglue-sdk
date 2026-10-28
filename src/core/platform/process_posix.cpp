@@ -101,9 +101,18 @@ bool ReadOwnCommandLine(std::vector<std::string>& args, std::string& executable)
 #endif
 }
 
+RelaunchHandler g_relaunch_handler = nullptr;
+
 }  // namespace
 
+void SetRelaunchHandler(RelaunchHandler handler) {
+  g_relaunch_handler = handler;
+}
+
 bool Relaunch() {
+  if (g_relaunch_handler) {
+    return g_relaunch_handler();
+  }
   std::vector<std::string> args;
   std::string executable;
   if (!ReadOwnCommandLine(args, executable)) {

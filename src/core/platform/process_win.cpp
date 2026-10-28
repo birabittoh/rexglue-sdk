@@ -33,9 +33,17 @@ namespace {
 // spawning is a simple way to hand our own pid to the new instance without
 // touching its command line.
 constexpr wchar_t kRelaunchFromPidEnvVar[] = L"REX_RELAUNCH_FROM_PID";
+RelaunchHandler g_relaunch_handler = nullptr;
 }  // namespace
 
+void SetRelaunchHandler(RelaunchHandler handler) {
+  g_relaunch_handler = handler;
+}
+
 bool Relaunch() {
+  if (g_relaunch_handler) {
+    return g_relaunch_handler();
+  }
   // GetCommandLineW() returns the exact command line this process was
   // started with (module path + args), so no argv capture at startup is
   // needed. CreateProcessW requires a mutable buffer for lpCommandLine.
