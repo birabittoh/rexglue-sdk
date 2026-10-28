@@ -459,7 +459,8 @@ endif()
 
 #=============================================================================
 # FFmpeg - Audio/video codec library (for XMA decoding)
-# Only builds libavutil and libavcodec needed for WMA Pro decoding
+# Only builds libavutil and libavcodec: the WMA/XMA audio decoders, plus WMV3
+# video for ASF movies (rex/audio/asf_movie_decoder.h)
 #=============================================================================
 
 set(FFMPEG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/FFmpeg")
@@ -480,6 +481,44 @@ configure_file(
   "${FFMPEG_OVERLAY_SRC_DIR}/bsf_list.c" "${FFMPEG_OVERLAY_BUILD_DIR}/libavcodec/bsf_list.c"
   COPYONLY
 )
+
+# The vendored per-platform configs (FFmpeg/config_<os>_<arch>.h, picked by
+# FFmpeg/config.h) only enable the audio decoders. Components switched on
+# here are flipped to 1 in a copy of the target's config, which libavcodec
+# force-includes; its FFMPEG_CONFIG_H include guard then suppresses the
+# stock header when config.h dispatches to it.
+#   WMAV2_DECODER: config_linux_aarch64.h wrongly leaves it off.
+#   VC1/WMV3_DECODER and the rest: WMV3 video (ASF title movies) and what
+#   FFmpeg's configure selects for it.
+set(FFMPEG_FORCED_CONFIGS
+    WMAV2_DECODER
+    VC1_DECODER WMV3_DECODER
+    H263_DECODER H263_PARSER H263DSP
+    MPEGVIDEO MPEG_ER ERROR_RESILIENCE ME_CMP
+    BLOCKDSP FDCTDSP H264CHROMA H264QPEL HPELDSP IDCTDSP INTRAX8
+    PIXBLOCKDSP QPELDSP STARTCODE VC1DSP VIDEODSP
+)
+if(WIN32)
+    set(_ffmpeg_os windows)
+elseif(APPLE)
+    set(_ffmpeg_os macos)
+elseif(ANDROID)
+    set(_ffmpeg_os android)
+else()
+    set(_ffmpeg_os linux)
+endif()
+if(IS_ARM64)
+    set(_ffmpeg_arch aarch64)
+else()
+    set(_ffmpeg_arch x86_64)
+endif()
+file(READ "${FFMPEG_DIR}/config_${_ffmpeg_os}_${_ffmpeg_arch}.h" _ffmpeg_config)
+foreach(_name IN LISTS FFMPEG_FORCED_CONFIGS)
+    string(REGEX REPLACE "#define CONFIG_${_name} 0" "#define CONFIG_${_name} 1"
+           _ffmpeg_config "${_ffmpeg_config}")
+endforeach()
+set(FFMPEG_FORCED_CONFIG_HEADER "${FFMPEG_OVERLAY_BUILD_DIR}/ffmpeg_forced_config.h")
+file(CONFIGURE OUTPUT "${FFMPEG_FORCED_CONFIG_HEADER}" CONTENT "${_ffmpeg_config}" @ONLY)
 
 # Common defines for both libraries
 set(FFMPEG_COMMON_DEFINES
@@ -695,6 +734,48 @@ add_library(libavcodec STATIC
     ${FFMPEG_DIR}/libavcodec/fft_float.c
     ${FFMPEG_DIR}/libavcodec/fft_fixed_32.c
     ${FFMPEG_DIR}/libavcodec/fft_init_table.c
+    # WMV3 video (see FFMPEG_FORCED_CONFIGS)
+    ${FFMPEG_DIR}/libavcodec/vc1dec.c
+    ${FFMPEG_DIR}/libavcodec/vc1_block.c
+    ${FFMPEG_DIR}/libavcodec/vc1_loopfilter.c
+    ${FFMPEG_DIR}/libavcodec/vc1_mc.c
+    ${FFMPEG_DIR}/libavcodec/vc1_pred.c
+    ${FFMPEG_DIR}/libavcodec/vc1.c
+    ${FFMPEG_DIR}/libavcodec/vc1data.c
+    ${FFMPEG_DIR}/libavcodec/vc1dsp.c
+    ${FFMPEG_DIR}/libavcodec/msmpeg4dec.c
+    ${FFMPEG_DIR}/libavcodec/msmpeg4.c
+    ${FFMPEG_DIR}/libavcodec/msmpeg4data.c
+    ${FFMPEG_DIR}/libavcodec/wmv2dsp.c
+    ${FFMPEG_DIR}/libavcodec/wmv2data.c
+    ${FFMPEG_DIR}/libavcodec/intrax8.c
+    ${FFMPEG_DIR}/libavcodec/intrax8dsp.c
+    ${FFMPEG_DIR}/libavcodec/h263dec.c
+    ${FFMPEG_DIR}/libavcodec/h263.c
+    ${FFMPEG_DIR}/libavcodec/ituh263dec.c
+    ${FFMPEG_DIR}/libavcodec/h263data.c
+    ${FFMPEG_DIR}/libavcodec/h263_parser.c
+    ${FFMPEG_DIR}/libavcodec/h263dsp.c
+    ${FFMPEG_DIR}/libavcodec/mpeg4video.c
+    ${FFMPEG_DIR}/libavcodec/mpeg4videodec.c
+    ${FFMPEG_DIR}/libavcodec/mpegvideo.c
+    ${FFMPEG_DIR}/libavcodec/mpegvideodsp.c
+    ${FFMPEG_DIR}/libavcodec/mpegvideo_motion.c
+    ${FFMPEG_DIR}/libavcodec/mpegutils.c
+    ${FFMPEG_DIR}/libavcodec/mpegvideodata.c
+    ${FFMPEG_DIR}/libavcodec/mpegpicture.c
+    ${FFMPEG_DIR}/libavcodec/rl.c
+    ${FFMPEG_DIR}/libavcodec/mpeg_er.c
+    ${FFMPEG_DIR}/libavcodec/error_resilience.c
+    ${FFMPEG_DIR}/libavcodec/me_cmp.c
+    ${FFMPEG_DIR}/libavcodec/blockdsp.c
+    ${FFMPEG_DIR}/libavcodec/h264chroma.c
+    ${FFMPEG_DIR}/libavcodec/h264qpel.c
+    ${FFMPEG_DIR}/libavcodec/hpeldsp.c
+    ${FFMPEG_DIR}/libavcodec/pixblockdsp.c
+    ${FFMPEG_DIR}/libavcodec/qpeldsp.c
+    ${FFMPEG_DIR}/libavcodec/startcode.c
+    ${FFMPEG_DIR}/libavcodec/videodsp.c
 )
 
 # Windows-specific source
@@ -714,6 +795,18 @@ if(IS_X86_64)
         ${FFMPEG_DIR}/libavcodec/x86/fdct.c
         ${FFMPEG_DIR}/libavcodec/x86/mpegaudiodsp.c
         ${FFMPEG_DIR}/libavcodec/x86/dct_init.c
+        ${FFMPEG_DIR}/libavcodec/x86/blockdsp_init.c
+        ${FFMPEG_DIR}/libavcodec/x86/h263dsp_init.c
+        ${FFMPEG_DIR}/libavcodec/x86/h264_qpel.c
+        ${FFMPEG_DIR}/libavcodec/x86/h264chroma_init.c
+        ${FFMPEG_DIR}/libavcodec/x86/hpeldsp_init.c
+        ${FFMPEG_DIR}/libavcodec/x86/me_cmp_init.c
+        ${FFMPEG_DIR}/libavcodec/x86/mpegvideo.c
+        ${FFMPEG_DIR}/libavcodec/x86/mpegvideodsp.c
+        ${FFMPEG_DIR}/libavcodec/x86/pixblockdsp_init.c
+        ${FFMPEG_DIR}/libavcodec/x86/qpeldsp_init.c
+        ${FFMPEG_DIR}/libavcodec/x86/vc1dsp_init.c
+        ${FFMPEG_DIR}/libavcodec/x86/videodsp_init.c
     )
 endif()
 
@@ -728,7 +821,25 @@ if(IS_ARM64)
         ${FFMPEG_DIR}/libavcodec/aarch64/neon.S
         ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_init.c
         ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_neon.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/h264chroma_init_aarch64.c
+        ${FFMPEG_DIR}/libavcodec/aarch64/h264cmc_neon.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/h264qpel_init_aarch64.c
+        ${FFMPEG_DIR}/libavcodec/aarch64/h264qpel_neon.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/hpeldsp_init_aarch64.c
+        ${FFMPEG_DIR}/libavcodec/aarch64/hpeldsp_neon.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/idctdsp_init_aarch64.c
+        ${FFMPEG_DIR}/libavcodec/aarch64/pixblockdsp_init_aarch64.c
+        ${FFMPEG_DIR}/libavcodec/aarch64/pixblockdsp_neon.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/vc1dsp_init_aarch64.c
+        ${FFMPEG_DIR}/libavcodec/aarch64/videodsp_init.c
     )
+    # mpegvideo.c calls ff_mpv_common_init_neon when HAVE_INTRINSICS_NEON,
+    # which every aarch64 config except Windows sets.
+    if(NOT WIN32)
+        target_sources(libavcodec PRIVATE
+            ${FFMPEG_DIR}/libavcodec/neon/mpegvideo.c
+        )
+    endif()
     target_compile_definitions(libavcodec PRIVATE
         HAVE_NEON=1
         HAVE_ARMV8=1
@@ -747,17 +858,8 @@ target_include_directories(libavcodec
 target_compile_definitions(libavcodec PRIVATE ${FFMPEG_COMMON_DEFINES})
 target_compile_options(libavcodec PRIVATE -w)  # Suppress warnings in third-party code
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND IS_ARM64)
-    # Workaround: the vendored FFmpeg submodule's config_linux_aarch64.h
-    # wrongly disables CONFIG_WMAV2_DECODER on this platform only (all other
-    # platform configs enable it), leaving BGM using WMA v1/v2 audio silent.
-    # Force-include a corrected shadow copy ahead of the real header; its
-    # FFMPEG_CONFIG_H include guard then suppresses the broken one when
-    # config.h dispatches to it. Remove this once the submodule is fixed
-    # upstream.
-    target_compile_options(libavcodec PRIVATE
-        -include "${CMAKE_CURRENT_SOURCE_DIR}/ffmpeg_config_overrides/config_linux_aarch64_wmav2_fix.h")
-endif()
+# See FFMPEG_FORCED_CONFIGS.
+target_compile_options(libavcodec PRIVATE -include "${FFMPEG_FORCED_CONFIG_HEADER}")
 
 target_link_libraries(libavcodec PUBLIC libavutil)
 if(WIN32)

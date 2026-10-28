@@ -3,10 +3,10 @@
  * @brief       Plays a pre-baked frame-sequence "clip" (images + PCM audio)
  *              fullscreen or in a rect
  *
- * @remarks     There's no video codec in this SDK (WmaPlayer's own comment
- *              notes the bundled FFmpeg is libavcodec+libavutil only, no
- *              libavformat, and even that's audio-only), so a mod that
- *              wants to show a short clip has to pre-bake it offline (e.g.
+ * @remarks     The only video codec in this SDK is WMV3 in ASF
+ *              (AsfMovieDecoder; the bundled FFmpeg is libavcodec+libavutil
+ *              only, no libavformat), so a mod that wants to show a short
+ *              clip in another format has to pre-bake it offline (e.g.
  *              ffmpeg extracting a numbered image sequence plus a WAV
  *              audio track) and play that back at runtime. BakedClipPlayer
  *              is exactly that playback half, factored out of the

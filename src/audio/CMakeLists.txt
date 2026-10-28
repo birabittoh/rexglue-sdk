@@ -3,6 +3,7 @@
 
 add_library(rexaudio OBJECT
     
+    asf_movie_decoder.cpp
     atrac3.cpp
     audio_driver.cpp
     audio_system.cpp
