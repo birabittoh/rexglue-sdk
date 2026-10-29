@@ -338,10 +338,10 @@ u32 XamUserWriteProfileSettings_entry(u32 title_id, u32 user_index, u32 setting_
   for (uint32_t n = 0; n < setting_count; ++n) {
     const X_USER_PROFILE_SETTING& setting = settings[n];
 
-    auto setting_type = static_cast<UserProfile::Setting::Type>(setting.data.type);
-    if (setting_type == UserProfile::Setting::Type::UNSET) {
-      continue;
-    }
+    // Type from the ID, like XAM: some titles leave data.type uninitialized.
+    UserProfile::Setting::Key setting_key;
+    setting_key.value = static_cast<uint32_t>(setting.setting_id);
+    auto setting_type = static_cast<UserProfile::Setting::Type>(setting_key.type);
 
     REXKRNL_DEBUG(
         "XamUserWriteProfileSettings: setting index [{}]:"
