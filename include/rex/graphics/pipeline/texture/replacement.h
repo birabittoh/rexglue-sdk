@@ -94,9 +94,13 @@ class TextureReplacement {
   //   tiled        : TextureKey::tiled
   //   format       : TextureKey::format
   //   endianness   : TextureKey::endianness
+  //   swizzle      : the fetch constant's swizzle, applied to every RGBA8
+  //                  output so the image is in the channel order the shader
+  //                  sees (raw BC blocks in a DDS are written unswizzled)
   void DumpTexture(uint64_t content_hash, uint32_t width, uint32_t height, uint32_t pitch_blocks,
                    bool tiled, xenos::TextureFormat format, xenos::Endian endianness,
-                   const uint8_t* guest_bytes, uint32_t guest_size) const;
+                   const uint8_t* guest_bytes, uint32_t guest_size,
+                   uint32_t swizzle = xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA) const;
 
   // ---------------------------------------------------------------------------
   // Injection path

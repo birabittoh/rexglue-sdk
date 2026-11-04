@@ -78,6 +78,22 @@ bool IsSkippedDumpSize(uint32_t width, uint32_t height) {
   return false;
 }
 
+// Reorders RGBA8 pixels by a fetch constant swizzle: each output channel takes
+// the source channel its 3-bit field names, or a constant 0 or 1.
+void ApplySwizzle(std::vector<uint8_t>& rgba, uint32_t swizzle) {
+  if ((swizzle & 0xFFF) == xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA)
+    return;
+  for (size_t i = 0; i + 4 <= rgba.size(); i += 4) {
+    uint8_t texel[4];
+    std::memcpy(texel, rgba.data() + i, 4);
+    for (uint32_t c = 0; c < 4; ++c) {
+      const uint32_t source = (swizzle >> (3 * c)) & 0b111;
+      rgba[i + c] =
+          source < 4 ? texel[source] : (source == xenos::XE_GPU_TEXTURE_SWIZZLE_1 ? 255 : 0);
+    }
+  }
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -682,7 +698,7 @@ uint64_t TextureReplacement::HashGuestData(const uint8_t* data, size_t size) {
 void TextureReplacement::DumpTexture(uint64_t content_hash, uint32_t width, uint32_t height,
                                      uint32_t pitch_blocks, bool tiled, xenos::TextureFormat format,
                                      xenos::Endian endianness, const uint8_t* guest_bytes,
-                                     uint32_t guest_size) const {
+                                     uint32_t guest_size, uint32_t swizzle) const {
   using F = xenos::TextureFormat;
 
   const FormatInfo* fi = FormatInfo::Get(format);
@@ -763,6 +779,7 @@ void TextureReplacement::DumpTexture(uint64_t content_hash, uint32_t width, uint
         }
         return;
       }
+      ApplySwizzle(rgba, swizzle);
       const uint32_t out_row_bytes = width * 4;
       if (!WritePNG_RGBA8(dest, width, height, rgba.data(), out_row_bytes)) {
         REXLOG_WARN("TextureReplacement: failed to write BC PNG dump {}", dest.string());
@@ -824,6 +841,7 @@ void TextureReplacement::DumpTexture(uint64_t content_hash, uint32_t width, uint
         }
       }
     }
+    ApplySwizzle(rgba, swizzle);
 
     if (use_png) {
       if (!WritePNG_RGBA8(dest, width, height, rgba.data(), out_row_bytes)) {
