@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -164,11 +165,24 @@ struct ModInfo {
 
 // Loads <mod_root>/code/<code_stem>[<config-postfix>].dll (falling back to
 // <code_stem>.dll) and constructs its plugin. Returns nullptr after logging a
-// detailed error (missing file, missing exports, ABI mismatch, or factory
-// failure). The library handle is retained for process lifetime; mod
-// plugins, like GPU plugins, are never unloaded.
+// detailed error (missing file, missing exports, ABI mismatch, factory
+// failure, or a crash while loading or constructing it). The library handle
+// is retained for process lifetime; mod plugins, like GPU plugins, are never
+// unloaded.
 std::unique_ptr<IModPlugin> LoadModPlugin(const std::filesystem::path& mod_root,
                                           std::string_view mod_name, std::string_view code_stem,
                                           const ModHostContext& ctx);
+
+// Runs `fn` on behalf of mod `mod_name`, containing whatever goes wrong in it:
+// a hardware fault (access violation, illegal instruction, ...) or an escaping
+// C++ exception is logged with `what` and turned into a false return instead
+// of taking the process down. A mod built against an older SDK can compile in
+// stale struct offsets or vtable slots (e.g. for Runtime's inline accessors)
+// that the ABI version cannot see, and its first call into the host is where
+// that shows up; the caller then drops the mod as if it had never loaded.
+// Best effort: a mod that scribbles on host memory before faulting can still
+// break things later, and a fast-fail/abort cannot be caught at all.
+bool CallModGuarded(std::string_view mod_name, std::string_view what,
+                    const std::function<void()>& fn);
 
 }  // namespace rex::system

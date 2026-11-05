@@ -32,6 +32,7 @@
 #include <rex/ui/overlay/mod_manager_overlay.h>
 #include <rex/ui/overlay/overlay_menu.h>
 #include <rex/ui/overlay/shader_debugger_overlay.h>
+#include <rex/ui/ui_text.h>
 #include <rex/graphics/command_processor.h>
 #include <rex/graphics/graphics_system.h>
 #include <rex/audio/audio_system.h>
@@ -500,17 +501,15 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
       if (auto plugin = rex::system::LoadModPlugin(mod.mod_root, mod.folder_name, mod.code, ctx)) {
         mod_plugins_.push_back(std::move(plugin));
         mod_plugin_owners_.push_back(mod.folder_name);
+      } else {
+        failed_mods_.push_back(mod.display_name.empty() ? mod.folder_name : mod.display_name);
       }
     }
   }
   if (imgui_drawer_) {
-    for (size_t i = 0; i < mod_plugins_.size(); ++i) {
-      const std::string& owner = mod_plugin_owners_[i];
-      rex::system::ScopedActiveMod active_mod(owner);
-      auto cvars_before = detail::SnapshotCvarValues();
-      mod_plugins_[i]->OnCreateDialogs(imgui_drawer_.get());
-      detail::RecordCvarDiff(runtime_.get(), owner, cvars_before);
-    }
+    ForEachModPlugin("OnCreateDialogs", [this](rex::system::IModPlugin& plugin) {
+      plugin.OnCreateDialogs(imgui_drawer_.get());
+    });
   }
 
   // Same timing NocturneRecomp's own OnPostSetup relies on for
@@ -968,13 +967,9 @@ void ReXApp::LaunchModule() {
     // KernelState/apps are fully live now; notify mod plugins before the
     // project's own OnPostLaunchModule so a mod's own memory/app scans (e.g.
     // ScanFilesystem) are ready by the time the guest starts running.
-    for (size_t i = 0; i < mod_plugins_.size(); ++i) {
-      const std::string& owner = mod_plugin_owners_[i];
-      rex::system::ScopedActiveMod active_mod(owner);
-      auto cvars_before = detail::SnapshotCvarValues();
-      mod_plugins_[i]->OnModuleLaunched();
-      detail::RecordCvarDiff(runtime_.get(), owner, cvars_before);
-    }
+    ForEachModPlugin("OnModuleLaunched",
+                     [](rex::system::IModPlugin& plugin) { plugin.OnModuleLaunched(); });
+    ShowFailedModsToast();
 
     OnPostLaunchModule(main_thread.get());
     main_thread->Resume();
@@ -1095,6 +1090,55 @@ void ReXApp::OnFileDrop(ui::FileDropEvent& e) {
   dialog->SideloadArchive(e.filename());
 }
 
+void ReXApp::ForEachModPlugin(std::string_view hook,
+                              const std::function<void(rex::system::IModPlugin&)>& call) {
+  for (size_t i = 0; i < mod_plugins_.size();) {
+    const std::string& owner = mod_plugin_owners_[i];
+    bool ok;
+    {
+      rex::system::ScopedActiveMod active_mod(owner);
+      auto cvars_before = detail::SnapshotCvarValues();
+      ok = rex::system::CallModGuarded(owner, hook, [&] { call(*mod_plugins_[i]); });
+      detail::RecordCvarDiff(runtime_.get(), owner, cvars_before);
+    }
+    if (ok) {
+      ++i;
+      continue;
+    }
+    // Drop it from every later hook. The object is leaked rather than
+    // destroyed: its destructor is code from the same broken build.
+    (void)mod_plugins_[i].release();
+    for (const auto& mod : mod_infos_) {
+      if (mod.folder_name == owner) {
+        failed_mods_.push_back(mod.display_name.empty() ? mod.folder_name : mod.display_name);
+        break;
+      }
+    }
+    mod_plugins_.erase(mod_plugins_.begin() + i);
+    mod_plugin_owners_.erase(mod_plugin_owners_.begin() + i);
+  }
+}
+
+void ReXApp::ShowFailedModsToast() {
+  if (failed_mods_.empty() || !imgui_drawer_) {
+    return;
+  }
+  std::string names;
+  for (const auto& name : failed_mods_) {
+    names += names.empty() ? name : ", " + name;
+  }
+  std::string message = ui::UiTextFormat(
+      "mods_failed_to_load", "These mods failed to load and were skipped: %s", names.c_str());
+  // The toast holds one message; keep the startup hint it may already show.
+  if (runtime_ && !runtime_->startup_hint().empty()) {
+    message += "\n" + runtime_->startup_hint();
+  }
+  if (!hint_toast_) {
+    hint_toast_ = std::make_unique<ui::HintToastDialog>(imgui_drawer_.get());
+  }
+  hint_toast_->Show(std::move(message));
+}
+
 void ReXApp::OnDestroy() {
   // Notify subclass before cleanup
   OnShutdown();
@@ -1102,8 +1146,12 @@ void ReXApp::OnDestroy() {
   // Notify mod plugins before their overlays/dialogs are torn down. Library
   // handles are intentionally kept loaded (see LoadModPlugin) -- guest
   // threads may still be executing plugin code pages at this point.
-  for (auto& plugin : mod_plugins_) {
-    plugin->OnShutdown();
+  for (size_t i = 0; i < mod_plugins_.size(); ++i) {
+    if (!rex::system::CallModGuarded(mod_plugin_owners_[i], "OnShutdown",
+                                     [&] { mod_plugins_[i]->OnShutdown(); })) {
+      // Its destructor is the mod's own code too; don't run it.
+      (void)mod_plugins_[i].release();
+    }
   }
   mod_plugins_.clear();
 

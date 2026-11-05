@@ -419,6 +419,16 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   // mod_attribution.h) for keybind auto-reassignment and cvar-override
   // conflict detection.
   std::vector<std::string> mod_plugin_owners_;
+  // Display names of enabled code mods that failed to load or crashed in a
+  // lifecycle hook, and so were left out of this run.
+  std::vector<std::string> failed_mods_;
+
+  // Calls `call` on every loaded mod plugin, attributed to its mod, dropping
+  // any plugin that crashes in it (see rex::system::CallModGuarded).
+  void ForEachModPlugin(std::string_view hook,
+                        const std::function<void(system::IModPlugin&)>& call);
+  // Tells the player which mods were skipped, through the hint toast.
+  void ShowFailedModsToast();
 };
 
 }  // namespace rex

@@ -22,6 +22,11 @@
 #include <rex/logging.h>
 #include <rex/platform.h>
 #include <rex/platform/dynlib.h>
+#include <rex/platform/exceptions.h>
+
+#if REX_PLATFORM_WIN32
+#include <excpt.h>  // GetExceptionCode/GetExceptionInformation for SEH_CATCH_ALL
+#endif
 
 namespace rex::system {
 
@@ -118,6 +123,41 @@ std::string MismatchedRuntimeDependency(const std::filesystem::path& path,
   return {};
 }
 
+// CallModGuarded's two layers. They are separate functions because a
+// function using __try may not also need C++ unwinding (no try/catch, no
+// locals with destructors), so the C++ exceptions are caught one frame in.
+struct GuardedCall {
+  const std::function<void()>* fn;
+  std::string cxx_error;
+};
+
+void InvokeCatchingCxx(GuardedCall* call) {
+  try {
+    (*call->fn)();
+  } catch (const SehException&) {
+    // POSIX delivers hardware faults as this exception; leave it to the
+    // SEH_CATCH_ALL one frame out so it is reported as a fault.
+    throw;
+  } catch (const std::exception& e) {
+    call->cxx_error = e.what();
+  } catch (...) {
+    call->cxx_error = "unknown exception";
+  }
+}
+
+bool InvokeCatchingFaults(GuardedCall* call, uint32_t* fault_code) {
+  bool completed = false;
+  SEH_TRY {
+    InvokeCatchingCxx(call);
+    completed = true;
+  }
+  SEH_CATCH_ALL {
+    *fault_code = platform::seh_thread_state().code;
+  }
+  SEH_END
+  return completed;
+}
+
 // Mod plugins stay loaded for process lifetime: guest threads may still be in
 // plugin code pages at shutdown, same rationale as GPU plugins.
 std::vector<platform::DynamicLibrary>& LoadedModPlugins() {
@@ -189,8 +229,15 @@ std::unique_ptr<IModPlugin> LoadModPlugin(const std::filesystem::path& mod_root,
     return nullptr;
   }
 
+  // Loading runs the library's static initializers, so it is guarded too.
   platform::DynamicLibrary library;
-  if (!library.Load(path, platform::SymbolResolution::kImmediate)) {
+  bool loaded = false;
+  if (!CallModGuarded(mod_name, "loading its code plugin", [&] {
+        loaded = library.Load(path, platform::SymbolResolution::kImmediate);
+      })) {
+    return nullptr;
+  }
+  if (!loaded) {
     REXSYS_ERROR("Mod '{}' code plugin failed to load: {}", mod_name, path.string());
     return nullptr;
   }
@@ -203,7 +250,10 @@ std::unique_ptr<IModPlugin> LoadModPlugin(const std::filesystem::path& mod_root,
     return nullptr;
   }
 
-  uint32_t plugin_abi = abi_version_fn();
+  uint32_t plugin_abi = 0;
+  if (!CallModGuarded(mod_name, "rex_mod_abi_version", [&] { plugin_abi = abi_version_fn(); })) {
+    return nullptr;
+  }
   if (plugin_abi != kModPluginAbiVersion) {
     REXSYS_ERROR("Mod '{}' code plugin has ABI version {}, host expects {}: {}", mod_name,
                  plugin_abi, kModPluginAbiVersion, path.string());
@@ -213,7 +263,11 @@ std::unique_ptr<IModPlugin> LoadModPlugin(const std::filesystem::path& mod_root,
   ModHostContext info = ctx;
   info.struct_size = sizeof(ModHostContext);
 
-  IModPlugin* plugin = create_fn(kModPluginAbiVersion, &info);
+  IModPlugin* plugin = nullptr;
+  if (!CallModGuarded(mod_name, "rex_mod_create",
+                      [&] { plugin = create_fn(kModPluginAbiVersion, &info); })) {
+    return nullptr;
+  }
   if (!plugin) {
     REXSYS_ERROR("Mod '{}' code plugin factory returned no plugin", mod_name);
     return nullptr;
@@ -222,6 +276,24 @@ std::unique_ptr<IModPlugin> LoadModPlugin(const std::filesystem::path& mod_root,
   LoadedModPlugins().push_back(std::move(library));
   REXSYS_INFO("Mod code plugin '{}' loaded ({})", mod_name, path.filename().string());
   return std::unique_ptr<IModPlugin>(plugin);
+}
+
+bool CallModGuarded(std::string_view mod_name, std::string_view what,
+                    const std::function<void()>& fn) {
+  GuardedCall call{&fn, {}};
+  uint32_t fault_code = 0;
+  if (!InvokeCatchingFaults(&call, &fault_code)) {
+    REXSYS_ERROR(
+        "Mod '{}' crashed in {} (fault {:#010x}); skipping it. It was most likely built "
+        "against an older SDK and needs to be rebuilt.",
+        mod_name, what, fault_code);
+    return false;
+  }
+  if (!call.cxx_error.empty()) {
+    REXSYS_ERROR("Mod '{}' threw out of {} ({}); skipping it.", mod_name, what, call.cxx_error);
+    return false;
+  }
+  return true;
 }
 
 }  // namespace rex::system
